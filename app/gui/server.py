@@ -332,10 +332,6 @@ def get_news_detail(news_id: str) -> dict[str, Any]:
     item["category"] = item.get("Level")
     item["url"] = item.get("EURL")
     item["published_at"] = item.get("DatePublished")
-    try:
-        item["raw_json"] = json.loads(item["raw_json"])
-    except (TypeError, json.JSONDecodeError):
-        pass
     return item
 
 
@@ -348,7 +344,56 @@ def list_task_statuses() -> dict[str, Any]:
     return {"items": statuses, "logs": TASK_MANAGER.list_logs()}
 
 
+def normalize_history_interval(value: object) -> int:
+    try:
+        interval = int(value or 60)
+    except (TypeError, ValueError):
+        interval = 60
+    return max(0, interval)
+
+
+def get_history_config() -> dict[str, Any]:
+    settings = get_settings()
+    with closing(connect(settings.database_file)) as connection:
+        init_db(connection)
+        rows = connection.execute(
+            "SELECT key, value FROM gui_settings WHERE key IN (?, ?)",
+            ("history_since", "history_interval_seconds"),
+        ).fetchall()
+    values = {row["key"]: row["value"] for row in rows}
+    return {
+        "since": values.get("history_since", ""),
+        "interval_seconds": normalize_history_interval(values.get("history_interval_seconds", "60")),
+    }
+
+
+def save_history_config(since: str | None = None, interval_seconds: int | None = None) -> dict[str, Any]:
+    current = get_history_config()
+    next_since = current["since"] if since is None else since.strip()
+    next_interval = current["interval_seconds"] if interval_seconds is None else normalize_history_interval(interval_seconds)
+
+    settings = get_settings()
+    with closing(connect(settings.database_file)) as connection:
+        init_db(connection)
+        connection.executemany(
+            """
+            INSERT INTO gui_settings (key, value, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (
+                ("history_since", next_since),
+                ("history_interval_seconds", str(next_interval)),
+            ),
+        )
+        connection.commit()
+    return {"since": next_since, "interval_seconds": next_interval}
+
+
 def remember_history_since(since: str, interval_seconds: int) -> None:
+    save_history_config(since, interval_seconds)
     settings = get_settings()
     with closing(connect(settings.database_file)) as connection:
         init_db(connection)
@@ -381,6 +426,8 @@ class GuiHandler(BaseHTTPRequestHandler):
             return json_response(self, item or {"error": "not found"}, status)
         if parsed.path == "/api/tasks":
             return json_response(self, list_task_statuses())
+        if parsed.path == "/api/history-config":
+            return json_response(self, get_history_config())
         return json_response(self, {"error": "not found"}, HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:
@@ -394,7 +441,7 @@ class GuiHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/tasks/history/start":
             payload = self._read_json_body()
             since = str(payload.get("since") or "").strip()
-            interval_seconds = int(payload.get("interval_seconds") or 60)
+            interval_seconds = normalize_history_interval(payload.get("interval_seconds"))
             if not since:
                 return json_response(self, {"error": "since is required"}, HTTPStatus.BAD_REQUEST)
             remember_history_since(since, interval_seconds)
@@ -402,6 +449,11 @@ class GuiHandler(BaseHTTPRequestHandler):
             return json_response(self, TASK_MANAGER.start(HISTORY_TASK, "app.collectors.history_sync_collector", args))
         if parsed.path == "/api/tasks/history/stop":
             return json_response(self, TASK_MANAGER.stop(HISTORY_TASK))
+        if parsed.path == "/api/history-config":
+            payload = self._read_json_body()
+            since = str(payload["since"]).strip() if "since" in payload else None
+            interval = normalize_history_interval(payload["interval_seconds"]) if "interval_seconds" in payload else None
+            return json_response(self, save_history_config(since, interval))
         return json_response(self, {"error": "not found"}, HTTPStatus.NOT_FOUND)
 
     def log_message(self, format: str, *args: object) -> None:

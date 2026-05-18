@@ -1,9 +1,8 @@
 const state = {
   categories: [],
   busy: false,
+  historyConfigLoaded: false,
 };
-
-const HISTORY_SINCE_KEY = "financialjuice.historySince";
 
 const $ = (id) => document.getElementById(id);
 
@@ -86,22 +85,47 @@ function normalizeDateTimeLocalValue(value) {
 
 function setHistorySince(value, { persist = false } = {}) {
   const normalized = normalizeDateTimeLocalValue(value);
-  if (!normalized) return;
-  $("historySince").value = normalized;
+  if (normalized) {
+    $("historySince").value = normalized;
+  }
   if (persist) {
-    localStorage.setItem(HISTORY_SINCE_KEY, normalized);
+    saveHistoryConfig().catch((error) => {
+      $("logBox").textContent = `保存历史同步参数失败: ${error.message}`;
+    });
   }
 }
 
-function restoreHistorySince() {
-  setHistorySince(localStorage.getItem(HISTORY_SINCE_KEY) || "");
+async function loadHistoryConfig() {
+  const config = await api("/api/history-config");
+  const normalized = normalizeDateTimeLocalValue(config.since);
+  if (normalized) {
+    $("historySince").value = normalized;
+  }
+  $("historyInterval").value = String(config.interval_seconds ?? 60);
+  state.historyConfigLoaded = true;
+}
+
+async function saveHistoryConfig() {
+  await api("/api/history-config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(getHistoryConfigPayload()),
+  });
+}
+
+function getHistoryConfigPayload() {
+  const interval = Number.parseInt($("historyInterval").value || "60", 10);
+  return {
+    since: $("historySince").value,
+    interval_seconds: Number.isNaN(interval) ? 60 : interval,
+  };
 }
 
 function applyHistorySinceFromTasks(items) {
-  if ($("historySince").value) return;
+  if ($("historySince").value || !state.historyConfigLoaded) return;
   const historyTask = items.find((item) => item.task_name === "history_sync_collector" && item.target_since);
   if (historyTask) {
-    setHistorySince(historyTask.target_since, { persist: true });
+    setHistorySince(historyTask.target_since);
   }
 }
 
@@ -265,7 +289,6 @@ async function startHistorySync() {
     $("logBox").textContent = "请先选择历史同步起始时间";
     return;
   }
-  setHistorySince(since, { persist: true });
   setBusy(true);
   try {
     await api("/api/tasks/history/start", {
@@ -294,6 +317,11 @@ $("runOnceBtn").addEventListener("click", () => postAction("/api/tasks/startup/r
 $("historyStartBtn").addEventListener("click", startHistorySync);
 $("historyStopBtn").addEventListener("click", () => postAction("/api/tasks/history/stop"));
 $("historySince").addEventListener("change", () => setHistorySince($("historySince").value, { persist: true }));
+$("historyInterval").addEventListener("change", () => {
+  saveHistoryConfig().catch((error) => {
+    $("logBox").textContent = `保存历史同步参数失败: ${error.message}`;
+  });
+});
 $("refreshBtn").addEventListener("click", refreshAll);
 $("categoryFilter").addEventListener("change", loadNews);
 $("searchInput").addEventListener("input", () => {
@@ -302,8 +330,7 @@ $("searchInput").addEventListener("input", () => {
 });
 $("closeDialog").addEventListener("click", () => $("detailDialog").close());
 
-restoreHistorySince();
-refreshAll().catch((error) => {
+loadHistoryConfig().then(refreshAll).catch((error) => {
   $("logBox").textContent = `加载失败: ${error.message}`;
 });
 setInterval(() => {

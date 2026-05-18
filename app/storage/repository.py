@@ -54,19 +54,15 @@ class NewsRepository:
 
         for item in items:
             raw = item.raw_payload
-            columns = [*RAW_COLUMNS, "fetched_at", "raw_json"]
+            columns = [*RAW_COLUMNS, "fetched_at", "created_at"]
             placeholders = ", ".join("?" for _ in columns)
             column_sql = ", ".join(columns)
             values = [
                 serialize_raw_value(raw.get(column))
                 for column in RAW_COLUMNS
             ]
-            values.extend(
-                [
-                    item.fetched_at.isoformat(),
-                    json.dumps(raw, ensure_ascii=False),
-                ]
-            )
+            fetched_at = item.fetched_at.isoformat()
+            values.extend([fetched_at, fetched_at])
             cursor = self.connection.execute(
                 f"INSERT OR IGNORE INTO news ({column_sql}) VALUES ({placeholders})",
                 values,

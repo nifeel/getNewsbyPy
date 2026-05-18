@@ -2,11 +2,13 @@ import asyncio
 import json
 import re
 import xml.etree.ElementTree as ET
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 
@@ -15,6 +17,7 @@ NEWS_ENDPOINTS = ("Startup", "GetPreviousNews")
 NEWS_ENDPOINT_MARKERS = tuple(f"FJService.asmx/{endpoint}" for endpoint in NEWS_ENDPOINTS)
 NEWS_URL_PATTERN = re.compile(r"https://\S*?FJService\.asmx/(?:Startup|GetPreviousNews)\?\S+")
 LOGIN_RESPONSE_PATTERN = re.compile(r"(login|sign in|signin|password)", re.IGNORECASE)
+NEWS_TIME_ZONE = ZoneInfo("America/New_York")
 
 
 class StartupApiError(RuntimeError):
@@ -83,17 +86,17 @@ def find_latest_startup_url(log_file: Path) -> str | None:
 
 def resolve_startup_url(configured_url: str | None, cache_file: Path, network_log_file: Path) -> str:
     if configured_url:
-        return configured_url
+        return normalize_news_url(configured_url)
 
     cached_url = read_cached_startup_url(cache_file)
     if cached_url:
         logger.info("Using cached Startup API URL from {}", cache_file)
-        return cached_url
+        return normalize_news_url(cached_url)
 
     discovered_url = find_latest_startup_url(network_log_file)
     if discovered_url:
         logger.info("Using Startup API URL discovered from {}", network_log_file)
-        return discovered_url
+        return normalize_news_url(discovered_url)
 
     raise StartupApiError(
         "News API URL is not configured and no captured Startup/GetPreviousNews URL was found. "
@@ -101,8 +104,37 @@ def resolve_startup_url(configured_url: str | None, cache_file: Path, network_lo
     )
 
 
-def startup_url_with_old_id(url: str, old_id: int) -> str:
+def eastern_time_offset_hours(moment: datetime | None = None) -> int:
+    current = moment or datetime.now(NEWS_TIME_ZONE)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=NEWS_TIME_ZONE)
+    else:
+        current = current.astimezone(NEWS_TIME_ZONE)
+    offset = current.utcoffset()
+    if offset is None:
+        return -5
+    return int(offset.total_seconds() // 3600)
+
+
+def normalize_news_url(url: str, *, offset_hours: int | None = None) -> str:
     parsed = urlparse(url)
+    query = parse_qsl(parsed.query, keep_blank_values=True)
+    next_query: list[tuple[str, str]] = []
+    replaced = False
+    time_offset = str(eastern_time_offset_hours() if offset_hours is None else offset_hours)
+    for key, value in query:
+        if key == "TimeOffset":
+            next_query.append((key, time_offset))
+            replaced = True
+        else:
+            next_query.append((key, value))
+    if not replaced:
+        next_query.append(("TimeOffset", time_offset))
+    return urlunparse(parsed._replace(query=urlencode(next_query)))
+
+
+def startup_url_with_old_id(url: str, old_id: int) -> str:
+    parsed = urlparse(normalize_news_url(url))
     query = parse_qsl(parsed.query, keep_blank_values=True)
     replaced = False
     next_query: list[tuple[str, str]] = []

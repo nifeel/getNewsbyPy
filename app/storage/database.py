@@ -35,8 +35,7 @@ CREATE TABLE IF NOT EXISTS news (
     Labels TEXT NOT NULL DEFAULT '[]',
     IID TEXT NOT NULL DEFAULT '',
     fetched_at TEXT NOT NULL,
-    raw_json TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours'))
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_news_news_id
@@ -63,6 +62,12 @@ CREATE TABLE IF NOT EXISTS task_status (
     last_error TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS gui_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -72,6 +77,12 @@ TASK_STATUS_COLUMNS = {
     "current_old_id": "TEXT NOT NULL DEFAULT ''",
     "current_oldest_at": "TEXT",
     "message": "TEXT NOT NULL DEFAULT ''",
+}
+
+
+GUI_SETTING_DEFAULTS = {
+    "history_since": "",
+    "history_interval_seconds": "60",
 }
 
 
@@ -105,7 +116,6 @@ NEWS_COLUMNS = {
     "Labels",
     "IID",
     "fetched_at",
-    "raw_json",
     "created_at",
 }
 
@@ -121,6 +131,7 @@ def init_db(connection: sqlite3.Connection) -> None:
     reset_legacy_news_table(connection)
     connection.executescript(SCHEMA)
     ensure_task_status_columns(connection)
+    ensure_gui_settings(connection)
     connection.commit()
 
 
@@ -142,3 +153,14 @@ def ensure_task_status_columns(connection: sqlite3.Connection) -> None:
     for column, definition in TASK_STATUS_COLUMNS.items():
         if column not in existing:
             connection.execute(f"ALTER TABLE task_status ADD COLUMN {column} {definition}")
+
+
+def ensure_gui_settings(connection: sqlite3.Connection) -> None:
+    for key, value in GUI_SETTING_DEFAULTS.items():
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO gui_settings (key, value, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            """,
+            (key, value),
+        )
