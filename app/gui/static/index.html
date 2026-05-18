@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FinancialJuice Collector</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>FinancialJuice Collector</h1>
+        <p id="subtitle">SQLite 数据、采集任务和历史同步进度</p>
+      </div>
+      <div class="actions">
+        <button id="runOnceBtn" class="secondary">执行一次</button>
+        <button id="startBtn">启动持续采集</button>
+        <button id="stopBtn" class="danger">停止</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="metrics" aria-label="统计">
+        <div class="metric">
+          <span>总新闻</span>
+          <strong id="totalCount">0</strong>
+        </div>
+        <div class="metric">
+          <span>今日新增</span>
+          <strong id="todayCount">0</strong>
+        </div>
+        <div class="metric wide">
+          <span>最新新闻</span>
+          <strong id="latestTitle">-</strong>
+        </div>
+      </section>
+
+      <section class="layout">
+        <aside class="panel">
+          <div class="panelHeader">
+            <h2>任务状态</h2>
+            <span id="refreshTime">-</span>
+          </div>
+          <div id="taskList" class="taskList"></div>
+
+          <h2>分类</h2>
+          <div id="categoryList" class="chips"></div>
+
+          <h2>来源</h2>
+          <div id="sourceList" class="miniList"></div>
+        </aside>
+
+        <section class="panel newsPanel">
+          <div class="historyBox">
+            <div>
+              <h2>历史融合同步</h2>
+              <p>历史补全向过去翻页，最新缺口补偿会在同步期间持续补齐新数据。</p>
+            </div>
+            <div class="historyControls">
+              <label>
+                起始日期
+                <input id="historySince" type="datetime-local">
+              </label>
+              <label>
+                每页间隔秒
+                <input id="historyInterval" type="number" min="0" step="1" value="60">
+              </label>
+              <button id="historyStartBtn">开始同步</button>
+              <button id="historyStopBtn" class="danger">停止同步</button>
+            </div>
+          </div>
+          <div class="toolbar">
+            <input id="searchInput" type="search" placeholder="搜索标题或正文">
+            <select id="categoryFilter">
+              <option value="">全部分类</option>
+            </select>
+            <button id="refreshBtn" class="secondary">刷新</button>
+          </div>
+          <div id="newsList" class="newsList"></div>
+        </section>
+      </section>
+
+      <section class="panel logsPanel">
+        <div class="panelHeader">
+          <h2>运行日志</h2>
+          <span>GUI 启动的任务输出</span>
+        </div>
+        <pre id="logBox"></pre>
+      </section>
+    </main>
+
+    <dialog id="detailDialog">
+      <div class="dialogHeader">
+        <h2 id="detailTitle">详情</h2>
+        <button id="closeDialog" class="iconButton" aria-label="关闭">x</button>
+      </div>
+      <pre id="detailBody"></pre>
+    </dialog>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

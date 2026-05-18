@@ -1,0 +1,2 @@
+"""FinancialJuice realtime news collector."""
+
