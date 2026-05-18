@@ -1,4 +1,4 @@
-﻿const state = {
+const state = {
   categories: [],
   busy: false,
 };
@@ -53,7 +53,7 @@ function renderStats(stats) {
     .join("");
 
   const selected = $("categoryFilter").value;
-  $("categoryFilter").innerHTML = '<option value="">鍏ㄩ儴鍒嗙被</option>' + state.categories
+  $("categoryFilter").innerHTML = '<option value="">全部分类</option>' + state.categories
     .map((item) => `<option value="${escapeHtml(item.category)}">${escapeHtml(item.category)}</option>`)
     .join("");
   $("categoryFilter").value = selected;
@@ -71,10 +71,10 @@ function renderTasks(data) {
   const items = data.items || [];
   $("taskList").innerHTML = items.length
     ? items.map(renderTask).join("")
-    : '<div class="task"><div class="taskMeta">鏆傛棤浠诲姟鐘舵€?/div></div>';
-  $("logBox").textContent = (data.logs || []).join("\n") || "鏆傛棤鏃ュ織";
+    : '<div class="task"><div class="taskMeta">暂无任务状态</div></div>';
+  $("logBox").textContent = (data.logs || []).join("\n") || "暂无日志";
   $("logBox").scrollTop = $("logBox").scrollHeight;
-  $("refreshTime").textContent = `鍒锋柊 ${new Date().toLocaleTimeString()}`;
+  $("refreshTime").textContent = `刷新 ${new Date().toLocaleTimeString()}`;
 }
 
 function normalizeDateTimeLocalValue(value) {
@@ -192,7 +192,7 @@ function renderNews(data) {
   const items = data.items || [];
   $("newsList").innerHTML = items.length
     ? items.map(renderNewsItem).join("")
-    : '<div class="newsItem"><h3>娌℃湁鍖归厤鐨勬柊闂?/h3></div>';
+    : '<div class="newsItem"><h3>没有匹配的新闻</h3></div>';
 
   document.querySelectorAll("[data-detail-id]").forEach((button) => {
     button.addEventListener("click", () => showDetail(button.dataset.detailId));
@@ -213,7 +213,7 @@ function renderNewsItem(item) {
       ${content}
       <div class="newsFooter">
         <span class="newsMeta">${escapeHtml(meta)}</span>
-        <button class="linkButton" data-detail-id="${item.id}">璇︽儏</button>
+        <button class="linkButton" data-detail-id="${item.id}">详情</button>
       </div>
     </article>
   `;
@@ -221,7 +221,7 @@ function renderNewsItem(item) {
 
 async function showDetail(id) {
   const item = await api(`/api/news/${id}`);
-  $("detailTitle").textContent = item.title || "璇︽儏";
+  $("detailTitle").textContent = item.title || "详情";
   $("detailBody").textContent = JSON.stringify(item, null, 2);
   $("detailDialog").showModal();
 }
@@ -262,7 +262,7 @@ async function startHistorySync() {
   const since = $("historySince").value;
   const interval = Number.parseInt($("historyInterval").value || "60", 10);
   if (!since) {
-    $("logBox").textContent = "璇峰厛閫夋嫨鍘嗗彶鍚屾璧峰鏃堕棿";
+    $("logBox").textContent = "请先选择历史同步起始时间";
     return;
   }
   setHistorySince(since, { persist: true });
@@ -304,7 +304,7 @@ $("closeDialog").addEventListener("click", () => $("detailDialog").close());
 
 restoreHistorySince();
 refreshAll().catch((error) => {
-  $("logBox").textContent = `鍔犺浇澶辫触: ${error.message}`;
+  $("logBox").textContent = `加载失败: ${error.message}`;
 });
 setInterval(() => {
   Promise.all([loadStats(), loadTasks()]).catch(() => {});

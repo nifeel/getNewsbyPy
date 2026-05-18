@@ -1,0 +1,30 @@
+# Local environment
+.env
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Runtime data
+data/*
+!data/.gitkeep
+*.db
+*.sqlite
+*.sqlite3
+!data/news.db
+*.db-journal
+*.sqlite-journal
+
+# Logs
+*.log
+data/logs/
+
+# Browser/session state
+data/browser_profile/
+data/storage_state.json
+data/startup_api_url.txt
+
+# OS and IDE local files
+.DS_Store
+.idea/

@@ -8,9 +8,79 @@ from collections import deque
 from contextlib import closing
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib import metadata
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _dependency_name(requirement: str) -> str:
+    requirement = requirement.split(";", 1)[0].strip()
+    for separator in ("[", "<", ">", "=", "!", "~"):
+        if separator in requirement:
+            requirement = requirement.split(separator, 1)[0]
+    return requirement.strip()
+
+
+def _load_project_dependencies() -> list[str]:
+    pyproject_path = PROJECT_ROOT / "pyproject.toml"
+    if not pyproject_path.exists():
+        return []
+
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        tomllib = None
+
+    if tomllib is not None:
+        with pyproject_path.open("rb") as file:
+            project = tomllib.load(file).get("project", {})
+        dependencies = project.get("dependencies", [])
+        return [item for item in dependencies if isinstance(item, str)]
+
+    dependencies: list[str] = []
+    in_dependencies = False
+    for raw_line in pyproject_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line.startswith("dependencies"):
+            in_dependencies = True
+            continue
+        if in_dependencies and line == "]":
+            break
+        if in_dependencies and line.startswith('"'):
+            dependencies.append(line.split('"', 2)[1])
+    return dependencies
+
+
+def _ensure_project_dependencies() -> None:
+    dependencies = _load_project_dependencies()
+    missing = []
+    for requirement in dependencies:
+        name = _dependency_name(requirement)
+        if not name:
+            continue
+        try:
+            metadata.distribution(name)
+        except metadata.PackageNotFoundError:
+            missing.append(requirement)
+
+    if not missing:
+        return
+
+    print(f"Missing Python packages detected: {', '.join(missing)}", flush=True)
+    command = [sys.executable, "-m", "pip", "install", *missing]
+    print("Installing missing Python packages...", flush=True)
+    try:
+        subprocess.check_call(command, cwd=PROJECT_ROOT)
+    except subprocess.CalledProcessError as exc:
+        print(f"Failed to install Python packages. Command exited with {exc.returncode}.", flush=True)
+        sys.exit(exc.returncode)
+
+
+_ensure_project_dependencies()
 
 from loguru import logger
 
@@ -74,6 +144,9 @@ class TaskManager:
 
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
+            env["PYTHONPATH"] = os.pathsep.join(
+                item for item in [str(PROJECT_ROOT), env.get("PYTHONPATH", "")] if item
+            )
             startupinfo = None
             if os.name == "nt":
                 startupinfo = subprocess.STARTUPINFO()
@@ -85,7 +158,7 @@ class TaskManager:
 
             process = subprocess.Popen(
                 command,
-                cwd=Path.cwd(),
+                cwd=PROJECT_ROOT,
                 env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
