@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,27 +10,27 @@
     <header class="topbar">
       <div>
         <h1>FinancialJuice Collector</h1>
-        <p id="subtitle">SQLite 数据、采集任务和历史同步进度</p>
+        <p id="subtitle">Real-time news collection with history sync</p>
       </div>
       <div class="actions">
-        <button id="runOnceBtn" class="secondary">执行一次</button>
-        <button id="startBtn">启动持续采集</button>
-        <button id="stopBtn" class="danger">停止</button>
+        <button id="runOnceBtn" class="secondary">Run Once</button>
+        <button id="startBtn">Start Collection</button>
+        <button id="stopBtn" class="danger">Stop</button>
       </div>
     </header>
 
     <main>
-      <section class="metrics" aria-label="统计">
+      <section class="metrics" aria-label="Stats">
         <div class="metric">
-          <span>总新闻</span>
+          <span>Total</span>
           <strong id="totalCount">0</strong>
         </div>
         <div class="metric">
-          <span>今日新增</span>
+          <span>Today</span>
           <strong id="todayCount">0</strong>
         </div>
         <div class="metric wide">
-          <span>最新新闻</span>
+          <span>Latest</span>
           <strong id="latestTitle">-</strong>
         </div>
       </section>
@@ -38,43 +38,41 @@
       <section class="layout">
         <aside class="panel">
           <div class="panelHeader">
-            <h2>任务状态</h2>
+            <h2>Tasks</h2>
             <span id="refreshTime">-</span>
           </div>
           <div id="taskList" class="taskList"></div>
 
-          <h2>分类</h2>
+          <h2>Categories</h2>
           <div id="categoryList" class="chips"></div>
 
-          <h2>来源</h2>
+          <h2>Sources</h2>
           <div id="sourceList" class="miniList"></div>
         </aside>
 
         <section class="panel newsPanel">
           <div class="historyBox">
             <div>
-              <h2>历史融合同步</h2>
-              <p>历史补全向过去翻页，最新缺口补偿会在同步期间持续补齐新数据。</p>
+              <h2>History Sync</h2>
+              <p>Set how far back to sync. The sync runner fills gaps automatically after the continuous collector starts.</p>
             </div>
             <div class="historyControls">
               <label>
-                起始日期
+                Since
                 <input id="historySince" type="datetime-local">
               </label>
-              <label>
-                每页间隔秒
-                <input id="historyInterval" type="number" min="0" step="1" value="60">
-              </label>
-              <button id="historyStartBtn">开始同步</button>
-              <button id="historyStopBtn" class="danger">停止同步</button>
+              <button id="historySaveBtn" class="secondary">Save</button>
+              <button id="syncRunnerStartBtn">Start Sync Runner</button>
+              <button id="syncRunnerStopBtn" class="danger">Stop Sync Runner</button>
             </div>
+            <div id="syncTaskList" class="syncTaskList"></div>
           </div>
           <div class="toolbar">
-            <input id="searchInput" type="search" placeholder="搜索标题或正文">
+            <input id="searchInput" type="search" placeholder="Search title or content">
             <select id="categoryFilter">
-              <option value="">全部分类</option>
+              <option value="">All categories</option>
             </select>
-            <button id="refreshBtn" class="secondary">刷新</button>
+            <button id="refreshBtn" class="secondary">Refresh</button>
           </div>
           <div id="newsList" class="newsList"></div>
         </section>
@@ -82,8 +80,8 @@
 
       <section class="panel logsPanel">
         <div class="panelHeader">
-          <h2>运行日志</h2>
-          <span>GUI 启动的任务输出</span>
+          <h2>Logs</h2>
+          <span>Output from GUI-managed tasks</span>
         </div>
         <pre id="logBox"></pre>
       </section>
@@ -91,8 +89,8 @@
 
     <dialog id="detailDialog">
       <div class="dialogHeader">
-        <h2 id="detailTitle">详情</h2>
-        <button id="closeDialog" class="iconButton" aria-label="关闭">x</button>
+        <h2 id="detailTitle">Detail</h2>
+        <button id="closeDialog" class="iconButton" aria-label="Close">x</button>
       </div>
       <pre id="detailBody"></pre>
     </dialog>

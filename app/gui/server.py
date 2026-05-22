@@ -1,5 +1,6 @@
 import json
 import os
+import queue
 import signal
 import subprocess
 import sys
@@ -86,14 +87,16 @@ from loguru import logger
 
 from app.config import get_settings
 from app.storage.database import connect, init_db
+from app.storage.sync_task_repository import SyncTaskRepository
 from app.storage.task_status import TaskStatusRepository, utc_now
 
 
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
+BROWSER_KEEPER_TASK = "browser_keeper"
 CONTINUOUS_TASK = "continuous_collector"
 RUN_ONCE_TASK = "startup_collector"
-HISTORY_TASK = "history_sync_collector"
+SYNC_RUNNER_TASK = "sync_task_runner"
 
 
 def row_to_dict(row: Any) -> dict[str, Any]:
@@ -125,16 +128,45 @@ def safe_print(message: str) -> None:
         logger.info(message)
 
 
+_AUTO_RESTART_MODULES: dict[str, str] = {}  # populated after constants are defined
+
+
 class TaskManager:
     def __init__(self) -> None:
         self.lock = threading.RLock()
         self.processes: dict[str, subprocess.Popen[str]] = {}
-        self.logs: deque[str] = deque(maxlen=300)
+        self.logs: deque[str] = deque(maxlen=500)
+        self._sse_queues: list[queue.Queue] = []
+        self._stopping: set[str] = set()
+        self._shutdown = False
 
     def append_log(self, message: str) -> None:
         line = f"{utc_now()} {message}".strip()
         with self.lock:
             self.logs.append(line)
+            clients = list(self._sse_queues)
+        for q in clients:
+            try:
+                q.put_nowait(line)
+            except queue.Full:
+                pass
+
+    def subscribe_sse(self) -> "queue.Queue[str | None]":
+        q: queue.Queue[str | None] = queue.Queue(maxsize=200)
+        with self.lock:
+            self._sse_queues.append(q)
+        return q
+
+    def unsubscribe_sse(self, q: "queue.Queue[str | None]") -> None:
+        with self.lock:
+            try:
+                self._sse_queues.remove(q)
+            except ValueError:
+                pass
+        try:
+            q.put_nowait(None)
+        except queue.Full:
+            pass
 
     def start(self, task_name: str, module_name: str, args: list[str] | None = None) -> dict[str, Any]:
         with self.lock:
@@ -144,6 +176,7 @@ class TaskManager:
 
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
+            env["PYTHONIOENCODING"] = "utf-8"
             env["PYTHONPATH"] = os.pathsep.join(
                 item for item in [str(PROJECT_ROOT), env.get("PYTHONPATH", "")] if item
             )
@@ -163,6 +196,8 @@ class TaskManager:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
                 startupinfo=startupinfo,
             )
@@ -176,10 +211,12 @@ class TaskManager:
     def stop(self, task_name: str) -> dict[str, Any]:
         with self.lock:
             process = self.processes.get(task_name)
+            self._stopping.add(task_name)
 
         if not process or process.poll() is not None:
             with self.lock:
                 self.processes.pop(task_name, None)
+                self._stopping.discard(task_name)
             self._update_task_status(task_name, "stopped", last_finished_at=utc_now())
             return {"ok": True, "message": f"{task_name} is not running"}
 
@@ -195,6 +232,7 @@ class TaskManager:
         self.append_log(f"{task_name} stopped pid={process.pid}")
         with self.lock:
             self.processes.pop(task_name, None)
+            self._stopping.discard(task_name)
         return {"ok": True, "message": f"{task_name} stopped"}
 
     def list_logs(self) -> list[str]:
@@ -214,13 +252,32 @@ class TaskManager:
     def _stream_output(self, task_name: str, process: subprocess.Popen[str]) -> None:
         if process.stdout:
             for line in process.stdout:
-                self.append_log(f"{task_name}: {line.rstrip()}")
+                msg = f"{task_name}: {line.rstrip()}"
+                self.append_log(msg)
+                print(msg, flush=True)
         return_code = process.wait()
-        self.append_log(f"{task_name} exited code={return_code}")
+        exit_msg = f"{task_name} exited code={return_code}"
+        self.append_log(exit_msg)
+        print(exit_msg, flush=True)
         if return_code != 0 or not self._has_terminal_status(task_name):
             self._update_task_status(task_name, "stopped", pid=process.pid, last_finished_at=utc_now())
         with self.lock:
             self.processes.pop(task_name, None)
+            intentional = task_name in self._stopping
+
+        # Auto-restart designated tasks on unexpected crash
+        if not intentional and not self._shutdown and task_name in _AUTO_RESTART_MODULES:
+            restart_msg = f"{task_name}: crashed (code={return_code}), auto-restarting in 5s"
+            self.append_log(restart_msg)
+            print(restart_msg, flush=True)
+            threading.Timer(5.0, self._do_auto_restart, args=(task_name,)).start()
+
+    def _do_auto_restart(self, task_name: str) -> None:
+        if self._shutdown:
+            return
+        module = _AUTO_RESTART_MODULES.get(task_name)
+        if module:
+            self.start(task_name, module)
 
     def _update_task_status(self, task_name: str, status: str, **values: object) -> None:
         settings = get_settings()
@@ -344,65 +401,39 @@ def list_task_statuses() -> dict[str, Any]:
     return {"items": statuses, "logs": TASK_MANAGER.list_logs()}
 
 
-def normalize_history_interval(value: object) -> int:
-    try:
-        interval = int(value or 60)
-    except (TypeError, ValueError):
-        interval = 60
-    return max(0, interval)
+def list_sync_tasks() -> dict[str, Any]:
+    settings = get_settings()
+    with closing(connect(settings.database_file)) as connection:
+        init_db(connection)
+        tasks = [row_to_dict(row) for row in SyncTaskRepository(connection).list_all()]
+    return {"items": tasks}
 
 
 def get_history_config() -> dict[str, Any]:
     settings = get_settings()
     with closing(connect(settings.database_file)) as connection:
         init_db(connection)
-        rows = connection.execute(
-            "SELECT key, value FROM gui_settings WHERE key IN (?, ?)",
-            ("history_since", "history_interval_seconds"),
-        ).fetchall()
-    values = {row["key"]: row["value"] for row in rows}
-    return {
-        "since": values.get("history_since", ""),
-        "interval_seconds": normalize_history_interval(values.get("history_interval_seconds", "60")),
-    }
+        row = connection.execute(
+            "SELECT value FROM gui_settings WHERE key = 'history_since'"
+        ).fetchone()
+    return {"since": row["value"] if row else ""}
 
 
-def save_history_config(since: str | None = None, interval_seconds: int | None = None) -> dict[str, Any]:
-    current = get_history_config()
-    next_since = current["since"] if since is None else since.strip()
-    next_interval = current["interval_seconds"] if interval_seconds is None else normalize_history_interval(interval_seconds)
-
+def save_history_config(since: str) -> dict[str, Any]:
+    since = since.strip()
     settings = get_settings()
     with closing(connect(settings.database_file)) as connection:
         init_db(connection)
-        connection.executemany(
+        connection.execute(
             """
             INSERT INTO gui_settings (key, value, updated_at)
-            VALUES (?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(key) DO UPDATE SET
-                value = excluded.value,
-                updated_at = excluded.updated_at
+            VALUES ('history_since', ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
             """,
-            (
-                ("history_since", next_since),
-                ("history_interval_seconds", str(next_interval)),
-            ),
+            (since,),
         )
         connection.commit()
-    return {"since": next_since, "interval_seconds": next_interval}
-
-
-def remember_history_since(since: str, interval_seconds: int) -> None:
-    save_history_config(since, interval_seconds)
-    settings = get_settings()
-    with closing(connect(settings.database_file)) as connection:
-        init_db(connection)
-        TaskStatusRepository(connection).upsert(
-            HISTORY_TASK,
-            "configured",
-            target_since=since,
-            message=f"last requested history sync interval={interval_seconds}s",
-        )
+    return {"since": since}
 
 
 class GuiHandler(BaseHTTPRequestHandler):
@@ -426,9 +457,40 @@ class GuiHandler(BaseHTTPRequestHandler):
             return json_response(self, item or {"error": "not found"}, status)
         if parsed.path == "/api/tasks":
             return json_response(self, list_task_statuses())
+        if parsed.path == "/api/sync-tasks":
+            return json_response(self, list_sync_tasks())
         if parsed.path == "/api/history-config":
             return json_response(self, get_history_config())
+
+        if parsed.path == "/api/logs/stream":
+            return self._serve_sse()
         return json_response(self, {"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+    def _serve_sse(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        q = TASK_MANAGER.subscribe_sse()
+        try:
+            for line in TASK_MANAGER.list_logs():
+                self.wfile.write(f"data: {json.dumps(line)}\n\n".encode("utf-8"))
+            self.wfile.flush()
+            while True:
+                try:
+                    line = q.get(timeout=20)
+                    if line is None:
+                        break
+                    self.wfile.write(f"data: {json.dumps(line)}\n\n".encode("utf-8"))
+                    self.wfile.flush()
+                except queue.Empty:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            TASK_MANAGER.unsubscribe_sse(q)
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
@@ -438,22 +500,14 @@ class GuiHandler(BaseHTTPRequestHandler):
             return json_response(self, TASK_MANAGER.stop(CONTINUOUS_TASK))
         if parsed.path == "/api/tasks/startup/run":
             return json_response(self, TASK_MANAGER.start(RUN_ONCE_TASK, "app.collectors.startup_collector"))
-        if parsed.path == "/api/tasks/history/start":
-            payload = self._read_json_body()
-            since = str(payload.get("since") or "").strip()
-            interval_seconds = normalize_history_interval(payload.get("interval_seconds"))
-            if not since:
-                return json_response(self, {"error": "since is required"}, HTTPStatus.BAD_REQUEST)
-            remember_history_since(since, interval_seconds)
-            args = ["--since", since, "--interval-seconds", str(interval_seconds)]
-            return json_response(self, TASK_MANAGER.start(HISTORY_TASK, "app.collectors.history_sync_collector", args))
-        if parsed.path == "/api/tasks/history/stop":
-            return json_response(self, TASK_MANAGER.stop(HISTORY_TASK))
+        if parsed.path == "/api/tasks/sync-runner/start":
+            return json_response(self, TASK_MANAGER.start(SYNC_RUNNER_TASK, "app.collectors.sync_task_runner"))
+        if parsed.path == "/api/tasks/sync-runner/stop":
+            return json_response(self, TASK_MANAGER.stop(SYNC_RUNNER_TASK))
         if parsed.path == "/api/history-config":
             payload = self._read_json_body()
-            since = str(payload["since"]).strip() if "since" in payload else None
-            interval = normalize_history_interval(payload["interval_seconds"]) if "interval_seconds" in payload else None
-            return json_response(self, save_history_config(since, interval))
+            since = str(payload.get("since") or "")
+            return json_response(self, save_history_config(since))
         return json_response(self, {"error": "not found"}, HTTPStatus.NOT_FOUND)
 
     def log_message(self, format: str, *args: object) -> None:
@@ -489,8 +543,16 @@ class GuiHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     settings = get_settings()
+    Path("data/logs").mkdir(parents=True, exist_ok=True)
+    logger.add("data/logs/server.log", rotation="10 MB", retention=5, encoding="utf-8", level="DEBUG")
+
     with closing(connect(settings.database_file)) as connection:
         init_db(connection)
+
+    _AUTO_RESTART_MODULES[BROWSER_KEEPER_TASK] = "app.collectors.browser_keeper"
+    _AUTO_RESTART_MODULES[SYNC_RUNNER_TASK] = "app.collectors.sync_task_runner"
+    TASK_MANAGER.start(BROWSER_KEEPER_TASK, "app.collectors.browser_keeper")
+    TASK_MANAGER.start(SYNC_RUNNER_TASK, "app.collectors.sync_task_runner")
 
     server = ThreadingHTTPServer((settings.gui_host, settings.gui_port), GuiHandler)
     url = f"http://{settings.gui_host}:{settings.gui_port}"
@@ -501,9 +563,11 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        TASK_MANAGER._shutdown = True
+        TASK_MANAGER.stop(BROWSER_KEEPER_TASK)
+        TASK_MANAGER.stop(SYNC_RUNNER_TASK)
         TASK_MANAGER.stop(CONTINUOUS_TASK)
         TASK_MANAGER.stop(RUN_ONCE_TASK)
-        TASK_MANAGER.stop(HISTORY_TASK)
         server.server_close()
 
 

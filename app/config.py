@@ -26,9 +26,11 @@ class Settings(BaseSettings):
     collector_interval_seconds: int = 30
     collector_retry_seconds: int = 10
     history_sync_interval_seconds: int = 60
+    login_check_interval_seconds: int = 60
     startup_api_url: str | None = None
     prefer_direct_startup: bool = True
     browser_fallback_enabled: bool = True
+    browser_collect_enabled: bool = False
     gui_host: str = "127.0.0.1"
     gui_port: int = 8000
 

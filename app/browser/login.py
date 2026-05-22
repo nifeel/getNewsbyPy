@@ -4,6 +4,7 @@ import re
 from loguru import logger
 from playwright.async_api import BrowserContext, Page, TimeoutError as PlaywrightTimeoutError, async_playwright
 
+from app.browser.context import background_window_args, block_images
 from app.browser.session import ensure_parent_dir
 from app.config import get_settings
 
@@ -83,6 +84,7 @@ async def save_login_state() -> None:
             channel=settings.browser_channel,
             headless=settings.headless,
         )
+        await block_images(context)
         page = await context.new_page()
 
         await page.goto(settings.login_url, wait_until="domcontentloaded")
@@ -113,7 +115,9 @@ async def save_login_state_with_credentials() -> None:
             user_data_dir=str(settings.browser_profile_dir),
             channel=settings.browser_channel,
             headless=settings.headless,
+            args=background_window_args(settings.headless),
         )
+        await block_images(context)
         page = await context.new_page()
         try:
             await page.goto(settings.login_url, wait_until="domcontentloaded")
@@ -179,6 +183,75 @@ async def relogin_with_retries(reason: str = "login state expired") -> None:
                 attempts,
                 exc,
                 interval_seconds,
+            )
+            await asyncio.sleep(interval_seconds)
+
+
+async def relogin_in_context(context: BrowserContext) -> None:
+    """Log in using an existing browser context — no new Playwright instance needed."""
+    settings = get_settings()
+    if not settings.account or not settings.password:
+        raise LoginCredentialsMissing("Set FJ_ACCOUNT and FJ_PASSWORD for automatic relogin.")
+
+    page = await context.new_page()
+    try:
+        await page.goto(settings.login_url, wait_until="domcontentloaded")
+
+        if not await _page_needs_login(page):
+            logger.info("Already logged in; skipping relogin.")
+            return
+
+        account_input = await _first_visible(page, ACCOUNT_SELECTORS)
+        password_input = await _first_visible(page, PASSWORD_SELECTORS)
+        if account_input is None or password_input is None:
+            raise AutomatedLoginFailed("Could not find visible login fields on the login page.")
+
+        await account_input.fill(settings.account)
+        await password_input.fill(settings.password)
+
+        submit = await _first_visible(page, SUBMIT_SELECTORS)
+        if submit is not None:
+            await submit.click()
+        else:
+            await password_input.press("Enter")
+
+        timeout_ms = settings.login_success_timeout_seconds * 1000
+        try:
+            await page.wait_for_load_state("networkidle", timeout=timeout_ms)
+        except PlaywrightTimeoutError:
+            logger.debug("Timed out waiting for networkidle after login submit; checking anyway.")
+
+        if await _page_needs_login(page):
+            raise AutomatedLoginFailed("Relogin did not leave the login page.")
+
+        logger.info("Relogin succeeded in existing browser context.")
+    finally:
+        await page.close()
+
+
+async def relogin_in_context_with_retries(
+    context: BrowserContext, reason: str = "login state expired"
+) -> None:
+    settings = get_settings()
+    if not has_local_credentials():
+        raise LoginCredentialsMissing(
+            "Login state expired and automatic login is not configured. Set FJ_ACCOUNT and FJ_PASSWORD."
+        )
+
+    attempts = max(settings.login_retry_attempts, 1)
+    interval_seconds = max(settings.login_retry_interval_seconds, 0)
+    for attempt in range(1, attempts + 1):
+        try:
+            logger.warning("Relogin attempt {}/{} after {}", attempt, attempts, reason)
+            await relogin_in_context(context)
+            logger.info("Relogin succeeded on attempt {}/{}", attempt, attempts)
+            return
+        except Exception as exc:
+            if attempt >= attempts:
+                raise AutomatedLoginFailed(f"Relogin failed after {attempts} attempts: {exc}") from exc
+            logger.warning(
+                "Relogin attempt {}/{} failed: {}. Retrying in {}s",
+                attempt, attempts, exc, interval_seconds,
             )
             await asyncio.sleep(interval_seconds)
 

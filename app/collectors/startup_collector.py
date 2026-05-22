@@ -46,7 +46,7 @@ async def read_startup_payload(response: Response) -> dict[str, Any] | None:
         return None
 
 
-async def collect_startup_news() -> tuple[int, int, int]:
+async def collect_startup_news() -> tuple[int, int, int, int]:
     settings = get_settings()
 
     if not storage_state_exists(settings.storage_state_file):
@@ -61,11 +61,18 @@ async def collect_startup_news() -> tuple[int, int, int]:
     try:
         payload = await collect_startup_payload()
     except LoginRequiredError as exc:
-        logger.warning("Login state appears expired: {}", exc)
-        await relogin_with_retries(str(exc))
+        settings = get_settings()
+        wait = settings.login_check_interval_seconds + 10
+        logger.warning("Login required, waiting {}s for browser_keeper to relogin: {}", wait, exc)
+        await asyncio.sleep(wait)
         payload = await collect_startup_payload()
 
     return store_startup_payload(payload)
+
+
+def _batch_min_id(items: list) -> int:
+    ids = [int(item.external_id) for item in items if item.external_id and item.external_id.isdigit()]
+    return min(ids) if ids else 0
 
 
 async def collect_startup_payload() -> dict[str, Any]:
@@ -83,7 +90,7 @@ async def collect_startup_payload() -> dict[str, Any]:
                 settings.startup_api_cache_file,
                 settings.network_log_file,
             )
-            logger.info("Fetching Startup payload directly from JSON API")
+            logger.info("Fetching Startup payload via urllib")
             payload = await fetch_startup_payload(startup_url, settings.storage_state_file)
             write_cached_startup_url(settings.startup_api_cache_file, startup_url)
             return payload
@@ -92,7 +99,8 @@ async def collect_startup_payload() -> dict[str, Any]:
         except StartupApiError as exc:
             if not settings.browser_fallback_enabled:
                 raise
-            logger.warning("Direct Startup API fetch failed, falling back to browser: {}", exc)
+            logger.warning("Direct Startup API fetch failed ({}), clearing cache and falling back to browser", exc)
+            settings.startup_api_cache_file.unlink(missing_ok=True)
             return await collect_startup_payload_with_browser()
 
     return await collect_startup_payload_with_browser()
@@ -122,18 +130,20 @@ async def collect_startup_payload_with_browser() -> dict[str, Any]:
 
         try:
             logger.info("Opening {}", settings.target_url)
-            await page.goto(settings.target_url, wait_until="domcontentloaded")
+            await page.goto(settings.target_url, wait_until="load", timeout=60000)
             password_input = page.locator("input[type='password']").first
             if await password_input.count() and await password_input.is_visible(timeout=1000):
                 raise LoginRequiredError("Browser was redirected to a login page.")
 
-            payload = await asyncio.wait_for(startup_payload_future, timeout=60)
+            payload = await asyncio.wait_for(startup_payload_future, timeout=120)
         except TimeoutError as exc:
             try:
                 password_visible = await page.locator("input[type='password']").first.is_visible(timeout=1000)
             except PlaywrightTimeoutError:
                 password_visible = False
-            if password_visible or "login" in page.url.lower() or "signin" in page.url.lower():
+            current_url = page.url
+            logger.warning("Browser fallback timed out. url={} login_visible={}", current_url, password_visible)
+            if password_visible or "login" in current_url.lower() or "signin" in current_url.lower():
                 raise LoginRequiredError("Browser could not capture Startup payload because login is required.") from exc
             raise
         finally:
@@ -143,7 +153,7 @@ async def collect_startup_payload_with_browser() -> dict[str, Any]:
     return payload
 
 
-def store_startup_payload(payload: dict[str, Any]) -> tuple[int, int, int]:
+def store_startup_payload(payload: dict[str, Any]) -> tuple[int, int, int, int]:
     settings = get_settings()
     items = parse_startup_payload(payload)
     logger.info("Parsed {} news items from Startup response", len(items))
@@ -151,16 +161,25 @@ def store_startup_payload(payload: dict[str, Any]) -> tuple[int, int, int]:
     with closing(connect(settings.database_file)) as connection:
         init_db(connection)
         repository = NewsRepository(connection)
-        inserted, skipped = repository.insert_many(items)
+        inserted, skipped, new_ids, min_skipped_id = repository.insert_many(items)
         total = repository.count()
 
-    return inserted, skipped, total
+    batch_min = _batch_min_id(items)
+    if new_ids:
+        print(f"new NewsIDs: {new_ids}", flush=True)
+    if skipped > 0 and min_skipped_id is not None:
+        print(f"skipped={skipped} min_skipped_id={min_skipped_id}", flush=True)
+    return inserted, skipped, total, batch_min
 
 
 def main() -> None:
+    from pathlib import Path as _Path
+    _Path("data/logs").mkdir(parents=True, exist_ok=True)
+    logger.add("data/logs/startup_collector.log", rotation="10 MB", retention=5, encoding="utf-8", level="DEBUG")
+
     try:
         update_task_status("running", pid=os.getpid(), last_started_at=utc_now(), last_error="")
-        inserted, skipped, total = asyncio.run(collect_startup_news())
+        inserted, skipped, total, _batch_min = asyncio.run(collect_startup_news())
     except KeyboardInterrupt:
         update_task_status("stopped", pid=os.getpid(), last_finished_at=utc_now())
         logger.info("Startup collector stopped by user")

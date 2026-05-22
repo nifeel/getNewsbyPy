@@ -1,7 +1,7 @@
 const state = {
   categories: [],
   busy: false,
-  historyConfigLoaded: false,
+  historySinceLoaded: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -33,8 +33,9 @@ function setBusy(value) {
   $("startBtn").disabled = value;
   $("stopBtn").disabled = value;
   $("runOnceBtn").disabled = value;
-  $("historyStartBtn").disabled = value;
-  $("historyStopBtn").disabled = value;
+  $("syncRunnerStartBtn").disabled = value;
+  $("syncRunnerStopBtn").disabled = value;
+  $("historySaveBtn").disabled = value;
 }
 
 function renderStats(stats) {
@@ -52,7 +53,7 @@ function renderStats(stats) {
     .join("");
 
   const selected = $("categoryFilter").value;
-  $("categoryFilter").innerHTML = '<option value="">全部分类</option>' + state.categories
+  $("categoryFilter").innerHTML = '<option value="">All categories</option>' + state.categories
     .map((item) => `<option value="${escapeHtml(item.category)}">${escapeHtml(item.category)}</option>`)
     .join("");
   $("categoryFilter").value = selected;
@@ -66,14 +67,33 @@ function renderStats(stats) {
 }
 
 function renderTasks(data) {
-  applyHistorySinceFromTasks(data.items || []);
   const items = data.items || [];
   $("taskList").innerHTML = items.length
     ? items.map(renderTask).join("")
-    : '<div class="task"><div class="taskMeta">暂无任务状态</div></div>';
-  $("logBox").textContent = (data.logs || []).join("\n") || "暂无日志";
-  $("logBox").scrollTop = $("logBox").scrollHeight;
-  $("refreshTime").textContent = `刷新 ${new Date().toLocaleTimeString()}`;
+    : '<div class="task"><div class="taskMeta">No tasks</div></div>';
+  $("refreshTime").textContent = `Updated ${new Date().toLocaleTimeString()}`;
+}
+
+function appendLog(line) {
+  const box = $("logBox");
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  box.textContent += (box.textContent ? "\n" : "") + line;
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+function initLogStream() {
+  const es = new EventSource("/api/logs/stream");
+  es.onmessage = (event) => {
+    try {
+      appendLog(JSON.parse(event.data));
+    } catch {
+      appendLog(event.data);
+    }
+  };
+  es.onerror = () => {
+    setTimeout(initLogStream, 5000);
+    es.close();
+  };
 }
 
 function normalizeDateTimeLocalValue(value) {
@@ -83,54 +103,29 @@ function normalizeDateTimeLocalValue(value) {
   return match ? match[1] : "";
 }
 
-function setHistorySince(value, { persist = false } = {}) {
-  const normalized = normalizeDateTimeLocalValue(value);
-  if (normalized) {
-    $("historySince").value = normalized;
-  }
-  if (persist) {
-    saveHistoryConfig().catch((error) => {
-      $("logBox").textContent = `保存历史同步参数失败: ${error.message}`;
-    });
-  }
-}
-
 async function loadHistoryConfig() {
   const config = await api("/api/history-config");
   const normalized = normalizeDateTimeLocalValue(config.since);
   if (normalized) {
     $("historySince").value = normalized;
   }
-  $("historyInterval").value = String(config.interval_seconds ?? 60);
-  state.historyConfigLoaded = true;
+  state.historySinceLoaded = true;
 }
 
 async function saveHistoryConfig() {
   await api("/api/history-config", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(getHistoryConfigPayload()),
+    body: JSON.stringify({ since: $("historySince").value }),
   });
-}
-
-function getHistoryConfigPayload() {
-  const interval = Number.parseInt($("historyInterval").value || "60", 10);
-  return {
-    since: $("historySince").value,
-    interval_seconds: Number.isNaN(interval) ? 60 : interval,
-  };
-}
-
-function applyHistorySinceFromTasks(items) {
-  if ($("historySince").value || !state.historyConfigLoaded) return;
-  const historyTask = items.find((item) => item.task_name === "history_sync_collector" && item.target_since);
-  if (historyTask) {
-    setHistorySince(historyTask.target_since);
-  }
+  appendLog(`History since saved: ${$("historySince").value}`);
 }
 
 function renderTask(item) {
   const status = escapeHtml(item.status || "unknown");
+  const extra = item.task_name === "sync_task_runner"
+    ? `<div class="taskMeta">pages=${item.pages ?? 0} current_id=${escapeHtml(item.current_old_id || "-")}</div>`
+    : "";
   return `
     <article class="task">
       <div class="taskTop">
@@ -138,85 +133,54 @@ function renderTask(item) {
         <span class="status ${status}">${status}</span>
       </div>
       <div class="taskMeta">cycle=${item.cycle ?? 0} inserted=${item.inserted ?? 0} skipped=${item.skipped ?? 0} total=${item.total ?? 0}</div>
-      ${renderHistoryProgress(item)}
-      ${renderLatestCatchupProgress(item)}
+      ${extra}
       <div class="taskMeta">pid=${item.pid || "-"} updated=${formatTime(item.updated_at)}</div>
-      ${item.last_error ? `<div class="taskMeta">error=${escapeHtml(item.last_error)}</div>` : ""}
+      ${item.last_error ? `<div class="taskMeta error">${escapeHtml(item.last_error)}</div>` : ""}
+      ${item.message ? `<div class="taskMeta">${escapeHtml(item.message)}</div>` : ""}
     </article>
   `;
 }
 
 function taskLabel(name) {
   const labels = {
-    continuous_collector: "持续采集",
-    startup_collector: "单次采集",
-    history_sync_collector: "历史补全",
-    latest_catchup_collector: "最新缺口补偿",
+    browser_keeper: "Browser Keeper",
+    browser_collector: "Browser Collector",
+    continuous_collector: "Continuous Collector",
+    startup_collector: "Run Once",
+    sync_task_runner: "Sync Task Runner",
   };
-  return labels[name] || name || "未知任务";
+  return labels[name] || name || "Unknown";
 }
 
-function renderHistoryProgress(item) {
-  if (item.task_name !== "history_sync_collector") return "";
-  const progress = calculateHistoryProgress(item);
-  const parts = [
-    `pages=${item.pages ?? 0}`,
-    item.target_since ? `since=${item.target_since}` : "",
-    item.current_old_id ? `oldID=${item.current_old_id}` : "",
-    item.current_oldest_at ? `oldest=${formatTime(item.current_oldest_at)}` : "",
-  ].filter(Boolean).join(" ");
-  return `
-    <div class="progressBlock">
-      <div class="progressHeader">
-        <span>历史覆盖进度</span>
-        <strong>${progress.label}</strong>
-      </div>
-      <div class="progressTrack"><div style="width: ${progress.percent}%"></div></div>
-      <div class="progressGrid">
-        <span>目标：${escapeHtml(item.target_since || "-")}</span>
-        <span>当前最旧：${escapeHtml(item.current_oldest_at ? formatTime(item.current_oldest_at) : "-")}</span>
-      </div>
-    </div>
-    <div class="taskMeta">${escapeHtml(parts)}</div>
-    ${item.message ? `<div class="taskMeta">${escapeHtml(item.message)}</div>` : ""}
-  `;
-}
-
-function renderLatestCatchupProgress(item) {
-  if (item.task_name !== "latest_catchup_collector") return "";
-  return `
-    <div class="progressBlock compact">
-      <div class="progressHeader">
-        <span>同步期间新增数据补偿</span>
-        <strong>${escapeHtml(item.status || "-")}</strong>
-      </div>
-      <div class="taskMeta">pages=${item.pages ?? 0} oldID=${escapeHtml(item.current_old_id || "0")} oldest=${escapeHtml(item.current_oldest_at ? formatTime(item.current_oldest_at) : "-")}</div>
-      ${item.message ? `<div class="taskMeta">${escapeHtml(item.message)}</div>` : ""}
-    </div>
-  `;
-}
-
-function calculateHistoryProgress(item) {
-  if (item.status === "completed") {
-    return { percent: 100, label: "100%" };
+function renderSyncTasks(data) {
+  const items = data.items || [];
+  if (!items.length) {
+    $("syncTaskList").innerHTML = '<div class="taskMeta">No sync tasks yet — will be created automatically after the first collection cycle.</div>';
+    return;
   }
-  const target = parseDate(item.target_since);
-  const oldest = parseDate(item.current_oldest_at);
-  const anchor = new Date();
-  if (!target || !oldest || anchor <= target) {
-    return { percent: 0, label: "-" };
-  }
-  const total = anchor.getTime() - target.getTime();
-  const done = anchor.getTime() - oldest.getTime();
-  const percent = Math.max(0, Math.min(100, Math.round((done / total) * 100)));
-  return { percent, label: `${percent}%` };
+  $("syncTaskList").innerHTML = items.map((t) => {
+    const status = escapeHtml(t.status || "unknown");
+    const type = t.target_since ? "history" : "gap";
+    const range = t.target_since
+      ? `since=${escapeHtml(t.target_since)}`
+      : `end=${t.end_news_id ?? "-"}`;
+    return `
+      <div class="task compact">
+        <div class="taskTop">
+          <strong>${type} #${t.id}</strong>
+          <span class="status ${status}">${status}</span>
+        </div>
+        <div class="taskMeta">start=${t.start_news_id} ${range} current=${t.current_news_id} inserted=${t.inserted} skipped=${t.skipped}</div>
+      </div>
+    `;
+  }).join("");
 }
 
 function renderNews(data) {
   const items = data.items || [];
   $("newsList").innerHTML = items.length
     ? items.map(renderNewsItem).join("")
-    : '<div class="newsItem"><h3>没有匹配的新闻</h3></div>';
+    : '<div class="newsItem"><h3>No news found</h3></div>';
 
   document.querySelectorAll("[data-detail-id]").forEach((button) => {
     button.addEventListener("click", () => showDetail(button.dataset.detailId));
@@ -237,7 +201,7 @@ function renderNewsItem(item) {
       ${content}
       <div class="newsFooter">
         <span class="newsMeta">${escapeHtml(meta)}</span>
-        <button class="linkButton" data-detail-id="${item.id}">详情</button>
+        <button class="linkButton" data-detail-id="${item.id}">Detail</button>
       </div>
     </article>
   `;
@@ -245,7 +209,7 @@ function renderNewsItem(item) {
 
 async function showDetail(id) {
   const item = await api(`/api/news/${id}`);
-  $("detailTitle").textContent = item.title || "详情";
+  $("detailTitle").textContent = item.title || "Detail";
   $("detailBody").textContent = JSON.stringify(item, null, 2);
   $("detailDialog").showModal();
 }
@@ -256,6 +220,10 @@ async function loadStats() {
 
 async function loadTasks() {
   renderTasks(await api("/api/tasks"));
+}
+
+async function loadSyncTasks() {
+  renderSyncTasks(await api("/api/sync-tasks"));
 }
 
 async function loadNews() {
@@ -269,7 +237,7 @@ async function loadNews() {
 }
 
 async function refreshAll() {
-  await Promise.all([loadStats(), loadTasks(), loadNews()]);
+  await Promise.all([loadStats(), loadTasks(), loadSyncTasks(), loadNews()]);
 }
 
 async function postAction(path) {
@@ -277,26 +245,6 @@ async function postAction(path) {
   try {
     await api(path, { method: "POST" });
     await Promise.all([loadTasks(), loadStats()]);
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function startHistorySync() {
-  const since = $("historySince").value;
-  const interval = Number.parseInt($("historyInterval").value || "60", 10);
-  if (!since) {
-    $("logBox").textContent = "请先选择历史同步起始时间";
-    return;
-  }
-  setBusy(true);
-  try {
-    await api("/api/tasks/history/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ since, interval_seconds: Number.isNaN(interval) ? 60 : interval }),
-    });
-    await loadTasks();
   } finally {
     setBusy(false);
   }
@@ -314,13 +262,13 @@ function escapeHtml(value) {
 $("startBtn").addEventListener("click", () => postAction("/api/tasks/continuous/start"));
 $("stopBtn").addEventListener("click", () => postAction("/api/tasks/continuous/stop"));
 $("runOnceBtn").addEventListener("click", () => postAction("/api/tasks/startup/run"));
-$("historyStartBtn").addEventListener("click", startHistorySync);
-$("historyStopBtn").addEventListener("click", () => postAction("/api/tasks/history/stop"));
-$("historySince").addEventListener("change", () => setHistorySince($("historySince").value, { persist: true }));
-$("historyInterval").addEventListener("change", () => {
-  saveHistoryConfig().catch((error) => {
-    $("logBox").textContent = `保存历史同步参数失败: ${error.message}`;
-  });
+$("syncRunnerStartBtn").addEventListener("click", () => postAction("/api/tasks/sync-runner/start"));
+$("syncRunnerStopBtn").addEventListener("click", () => postAction("/api/tasks/sync-runner/stop"));
+$("historySaveBtn").addEventListener("click", () => {
+  setBusy(true);
+  saveHistoryConfig()
+    .catch((e) => appendLog(`Save failed: ${e.message}`))
+    .finally(() => setBusy(false));
 });
 $("refreshBtn").addEventListener("click", refreshAll);
 $("categoryFilter").addEventListener("change", loadNews);
@@ -331,8 +279,9 @@ $("searchInput").addEventListener("input", () => {
 $("closeDialog").addEventListener("click", () => $("detailDialog").close());
 
 loadHistoryConfig().then(refreshAll).catch((error) => {
-  $("logBox").textContent = `加载失败: ${error.message}`;
+  appendLog(`Load failed: ${error.message}`);
 });
 setInterval(() => {
-  Promise.all([loadStats(), loadTasks()]).catch(() => {});
+  Promise.all([loadStats(), loadTasks(), loadSyncTasks()]).catch(() => {});
 }, 2000);
+initLogStream();

@@ -1,10 +1,14 @@
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def utc_now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
+
+
+def cst_now() -> str:
+    return (datetime.utcnow() + timedelta(hours=8)).isoformat(timespec="seconds")
 
 
 class TaskStatusRepository:

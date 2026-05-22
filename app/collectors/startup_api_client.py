@@ -217,3 +217,36 @@ def parse_startup_response_text(response_text: str) -> dict[str, Any]:
 
 async def fetch_startup_payload(url: str, storage_state_file: Path, timeout: int = 30) -> dict[str, Any]:
     return await asyncio.to_thread(fetch_startup_payload_sync, url, storage_state_file, timeout)
+
+
+async def fetch_startup_payload_via_context(
+    url: str,
+    context: Any,
+    timeout: int = 30,
+) -> dict[str, Any]:
+    """Fetch JSON payload through the browser's own cookie jar.
+
+    Uses Playwright's APIRequestContext so cookies are managed automatically —
+    no extraction from storage_state.json required.
+    """
+    headers = {
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Referer": "https://www.financialjuice.com/home",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+        ),
+        "X-Requested-With": "XMLHttpRequest",
+    }
+    try:
+        response = await context.request.get(url, headers=headers, timeout=timeout * 1000)
+    except Exception as exc:
+        raise StartupApiError(f"Browser request failed: {exc}") from exc
+
+    if response.status in {401, 403}:
+        raise LoginRequiredError(f"Login state is no longer accepted: HTTP {response.status}")
+    if response.status >= 400:
+        raise StartupApiError(f"Startup API returned HTTP {response.status}")
+
+    text = await response.text()
+    return parse_startup_response_text(text)
