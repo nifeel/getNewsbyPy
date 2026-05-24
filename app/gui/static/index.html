@@ -1,87 +1,107 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>FinancialJuice Collector</title>
     <link rel="stylesheet" href="/static/app.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.min.css">
   </head>
   <body>
     <header class="topbar">
       <div>
         <h1>FinancialJuice Collector</h1>
-        <p id="subtitle">Real-time news collection with history sync</p>
+        <p id="subtitle">实时新闻采集系统</p>
       </div>
       <div class="actions">
-        <button id="runOnceBtn" class="secondary">Run Once</button>
-        <button id="startBtn">Start Collection</button>
-        <button id="stopBtn" class="danger">Stop</button>
+        <span id="refreshTime" class="muted"></span>
+        <button id="refreshBtn" class="secondary">刷新</button>
       </div>
     </header>
 
     <main>
-      <section class="metrics" aria-label="Stats">
+      <!-- 统计 -->
+      <section class="metrics">
         <div class="metric">
-          <span>Total</span>
+          <span>总条数</span>
           <strong id="totalCount">0</strong>
         </div>
         <div class="metric">
-          <span>Today</span>
+          <span>今日</span>
           <strong id="todayCount">0</strong>
         </div>
+        <div class="metric collected">
+          <span>实时采集</span>
+          <strong id="collectedCount">0</strong>
+        </div>
         <div class="metric wide">
-          <span>Latest</span>
+          <span>最新</span>
           <strong id="latestTitle">-</strong>
         </div>
       </section>
 
+      <!-- 主体 -->
       <section class="layout">
-        <aside class="panel">
+        <!-- 左栏：服务状态 -->
+        <aside class="panel leftPanel">
           <div class="panelHeader">
-            <h2>Tasks</h2>
-            <span id="refreshTime">-</span>
+            <h2>服务状态</h2>
+            <span id="taskRefreshTime" class="muted"></span>
           </div>
-          <div id="taskList" class="taskList"></div>
+          <div id="serviceList" class="taskList"></div>
 
-          <h2>Categories</h2>
+          <h2 style="margin-bottom:10px">资源占用 <span id="memoryTotal" class="muted"></span></h2>
+          <div id="memChart" class="memChart"></div>
+          <div id="memoryList" class="miniList"></div>
+
+          <h2 style="margin-bottom:10px">登录事件</h2>
+          <div id="loginEventList" class="loginEventList"></div>
+
+          <h2 style="margin-bottom:10px">分类</h2>
           <div id="categoryList" class="chips"></div>
 
-          <h2>Sources</h2>
+          <h2 style="margin-bottom:10px">来源</h2>
           <div id="sourceList" class="miniList"></div>
         </aside>
 
-        <section class="panel newsPanel">
-          <div class="historyBox">
-            <div>
-              <h2>History Sync</h2>
-              <p>Set how far back to sync. The sync runner fills gaps automatically after the continuous collector starts.</p>
+        <!-- 右栏 -->
+        <section class="rightPanel">
+          <!-- 历史同步 -->
+          <div class="panel historyBox">
+            <div class="historyHeader">
+              <div>
+                <h2>历史同步</h2>
+                <p class="muted">设置截止时间，Robot 启动后自动拉取历史数据</p>
+              </div>
+              <div class="historyControls">
+                <label class="muted">
+                  截止时间
+                  <input id="historySince" type="datetime-local">
+                </label>
+                <button id="historySaveBtn" class="secondary">保存</button>
+              </div>
             </div>
-            <div class="historyControls">
-              <label>
-                Since
-                <input id="historySince" type="datetime-local">
-              </label>
-              <button id="historySaveBtn" class="secondary">Save</button>
-              <button id="syncRunnerStartBtn">Start Sync Runner</button>
-              <button id="syncRunnerStopBtn" class="danger">Stop Sync Runner</button>
+            <div id="historyTaskList" class="historyTaskList"></div>
+          </div>
+
+          <!-- 新闻列表 -->
+          <div class="panel newsPanel">
+            <div class="toolbar">
+              <input id="searchInput" type="search" placeholder="搜索标题或内容…">
+              <select id="categoryFilter">
+                <option value="">全部分类</option>
+              </select>
             </div>
-            <div id="syncTaskList" class="syncTaskList"></div>
+            <div id="newsList" class="newsList"></div>
           </div>
-          <div class="toolbar">
-            <input id="searchInput" type="search" placeholder="Search title or content">
-            <select id="categoryFilter">
-              <option value="">All categories</option>
-            </select>
-            <button id="refreshBtn" class="secondary">Refresh</button>
-          </div>
-          <div id="newsList" class="newsList"></div>
         </section>
       </section>
 
+      <!-- 日志 -->
       <section class="panel logsPanel">
         <div class="panelHeader">
-          <h2>Logs</h2>
-          <span>Output from GUI-managed tasks</span>
+          <h2>运行日志</h2>
+          <span class="muted">Robot 及子服务输出</span>
         </div>
         <pre id="logBox"></pre>
       </section>
@@ -89,12 +109,13 @@
 
     <dialog id="detailDialog">
       <div class="dialogHeader">
-        <h2 id="detailTitle">Detail</h2>
-        <button id="closeDialog" class="iconButton" aria-label="Close">x</button>
+        <h2 id="detailTitle">详情</h2>
+        <button id="closeDialog" class="iconButton" aria-label="关闭">×</button>
       </div>
       <pre id="detailBody"></pre>
     </dialog>
 
+    <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.iife.min.js"></script>
     <script src="/static/app.js"></script>
   </body>
 </html>

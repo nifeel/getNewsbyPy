@@ -3,12 +3,17 @@ import sqlite3
 from datetime import datetime, timedelta
 
 
-def utc_now() -> str:
-    return datetime.utcnow().isoformat(timespec="seconds")
+def now_at() -> str:
+    """返回中国时间，统一格式 yyyy-MM-dd HH:mm:ss"""
+    return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def cst_now() -> str:
-    return (datetime.utcnow() + timedelta(hours=8)).isoformat(timespec="seconds")
+    return now_at()
+
+
+def utc_now() -> str:
+    return now_at()
 
 
 class TaskStatusRepository:

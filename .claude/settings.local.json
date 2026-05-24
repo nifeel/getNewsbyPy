@@ -1,18 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(D:/Develop/python/3.14/python.exe -m pip install tzdata)",
-      "Bash(D:/Develop/python/3.14/python.exe *)",
-      "Read(//mnt/d/Develop/**)",
-      "Bash(python -c ' *)",
-      "PowerShell(Get-Process *)",
-      "Bash(python *)",
-      "Bash(.venv\\\\Scripts\\\\python.exe *)",
-      "PowerShell(.venv\\\\Scripts\\\\python.exe -c \"from app.browser.context import block_images; from app.browser.login import save_login_state; from app.collectors.browser_keeper import run_keeper; print\\('OK'\\)\")",
-      "PowerShell(py *)",
-      "Bash(py *)",
-      "Bash(git rm *)",
-      "Bash(git add *)"
+      "Bash(*)",
+      "Read",
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "Bash(python3 -c ' *)"
     ]
   }
 }

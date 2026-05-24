@@ -128,7 +128,7 @@ select {
 
 .metrics {
   display: grid;
-  grid-template-columns: minmax(150px, 0.6fr) minmax(150px, 0.6fr) minmax(300px, 2fr);
+  grid-template-columns: minmax(130px, 0.4fr) minmax(130px, 0.4fr) minmax(130px, 0.4fr) minmax(300px, 2fr);
   gap: 14px;
   margin-bottom: 14px;
 }
@@ -152,6 +152,16 @@ select {
 .metric strong {
   font-size: 30px;
   line-height: 1.1;
+}
+
+.metric.collected strong {
+  color: var(--accent, #2196f3);
+  font-size: 36px;
+}
+
+.metric.collected span {
+  color: var(--accent, #2196f3);
+  font-weight: 600;
 }
 
 .metric.wide strong {
@@ -234,6 +244,14 @@ select {
   background: var(--muted);
 }
 
+.status.ok {
+  background: var(--ok);
+}
+
+.status.warning {
+  background: var(--warning);
+}
+
 .chip {
   display: flex;
   justify-content: space-between;
@@ -246,12 +264,49 @@ select {
   color: var(--text);
 }
 
+.memChart {
+  width: 100%;
+  min-height: 180px;
+  margin-bottom: 12px;
+}
+
+.memChart .u-over,
+.memChart .u-cursor-pt {
+  display: none;
+}
+
 .miniList div {
   display: flex;
   justify-content: space-between;
   border-bottom: 1px solid var(--line);
   padding: 7px 0;
   color: var(--muted);
+}
+
+.loginEventList {
+  margin-bottom: 18px;
+}
+
+.loginEvent {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.loginEvent .taskMeta {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.loginEvent .eventTime {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .newsPanel {
@@ -263,11 +318,9 @@ select {
 }
 
 .historyBox {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
-  padding: 0 0 14px;
-  margin-bottom: 14px;
-  border-bottom: 1px solid var(--line);
 }
 
 .progressBlock {
@@ -311,14 +364,31 @@ select {
   background: linear-gradient(90deg, var(--accent), var(--accent-2));
 }
 
-.historyControls {
-  display: grid;
-  grid-template-columns: minmax(210px, 1fr) auto auto auto;
-  gap: 10px;
-  align-items: end;
+.rightPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
 }
 
-.syncTaskList {
+.historyHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.historyControls {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-shrink: 0;
+}
+
+.syncTaskList,
+.historyTaskList {
   display: grid;
   gap: 6px;
   margin-top: 6px;
@@ -326,6 +396,24 @@ select {
 
 .task.compact {
   padding: 7px 10px;
+}
+
+.historyPager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.historyPager button {
+  min-width: 32px;
+  min-height: 28px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .historyControls label {
@@ -346,9 +434,23 @@ select {
 .newsList {
   display: grid;
   gap: 10px;
-  max-height: 720px;
-  overflow: auto;
-  padding-right: 4px;
+}
+
+.newsPager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 10px 0 2px;
+  border-top: 1px solid var(--line);
+}
+
+.newsPager button {
+  min-width: 32px;
+  min-height: 28px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .newsItem {

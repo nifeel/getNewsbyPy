@@ -224,10 +224,10 @@ async def fetch_startup_payload_via_context(
     context: Any,
     timeout: int = 30,
 ) -> dict[str, Any]:
-    """Fetch JSON payload through the browser's own cookie jar.
+    """通过浏览器自身的 cookie jar 获取 JSON 数据。
 
-    Uses Playwright's APIRequestContext so cookies are managed automatically —
-    no extraction from storage_state.json required.
+    使用 Playwright 的 APIRequestContext，cookie 自动管理 —
+    无需从 storage_state.json 中提取。
     """
     headers = {
         "Accept": "application/json, text/javascript, */*; q=0.01",

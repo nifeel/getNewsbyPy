@@ -18,9 +18,9 @@ from app.collectors.startup_api_client import (
     write_cached_startup_url,
 )
 from app.parsers.financialjuice import parse_startup_payload
-from app.storage.database import connect, init_db
+from app.storage.database import connect, init_db, SOURCE_METHOD_STARTUP
 from app.storage.repository import NewsRepository
-from app.storage.task_status import TaskStatusRepository, utc_now
+from app.storage.task_status import TaskStatusRepository, cst_now
 
 
 TASK_NAME = "startup_collector"
@@ -46,7 +46,7 @@ async def read_startup_payload(response: Response) -> dict[str, Any] | None:
         return None
 
 
-async def collect_startup_news() -> tuple[int, int, int, int]:
+async def collect_startup_news(task_id: int = 0) -> tuple[int, int, int, int]:
     settings = get_settings()
 
     if not storage_state_exists(settings.storage_state_file):
@@ -63,16 +63,17 @@ async def collect_startup_news() -> tuple[int, int, int, int]:
     except LoginRequiredError as exc:
         settings = get_settings()
         wait = settings.login_check_interval_seconds + 10
-        logger.warning("Login required, waiting {}s for browser_keeper to relogin: {}", wait, exc)
+        logger.warning("Login required, waiting {}s for relogin: {}", wait, exc)
         await asyncio.sleep(wait)
         payload = await collect_startup_payload()
 
-    return store_startup_payload(payload)
+    return store_startup_payload(payload, task_id=task_id)
 
 
-def _batch_min_id(items: list) -> int:
+def _batch_min_id(items: list, fallback: int = 0) -> int:
+    """返回 *items* 中最小的 external_id，若没有有效值则返回 *fallback*。"""
     ids = [int(item.external_id) for item in items if item.external_id and item.external_id.isdigit()]
-    return min(ids) if ids else 0
+    return min(ids) if ids else fallback
 
 
 async def collect_startup_payload() -> dict[str, Any]:
@@ -153,7 +154,7 @@ async def collect_startup_payload_with_browser() -> dict[str, Any]:
     return payload
 
 
-def store_startup_payload(payload: dict[str, Any]) -> tuple[int, int, int, int]:
+def store_startup_payload(payload: dict[str, Any], task_id: int = 0) -> tuple[int, int, int, int]:
     settings = get_settings()
     items = parse_startup_payload(payload)
     logger.info("Parsed {} news items from Startup response", len(items))
@@ -161,7 +162,9 @@ def store_startup_payload(payload: dict[str, Any]) -> tuple[int, int, int, int]:
     with closing(connect(settings.database_file)) as connection:
         init_db(connection)
         repository = NewsRepository(connection)
-        inserted, skipped, new_ids, min_skipped_id = repository.insert_many(items)
+        inserted, skipped, new_ids, min_skipped_id = repository.insert_many(
+            items, source_method=SOURCE_METHOD_STARTUP, task_id=task_id,
+        )
         total = repository.count()
 
     batch_min = _batch_min_id(items)
@@ -173,19 +176,19 @@ def store_startup_payload(payload: dict[str, Any]) -> tuple[int, int, int, int]:
 
 
 def main() -> None:
-    from pathlib import Path as _Path
-    _Path("data/logs").mkdir(parents=True, exist_ok=True)
-    logger.add("data/logs/startup_collector.log", rotation="10 MB", retention=5, encoding="utf-8", level="DEBUG")
+    settings = get_settings()
+    settings.log_dir.mkdir(parents=True, exist_ok=True)
+    logger.add(str(settings.log_dir / "startup_collector.log"), rotation="10 MB", retention=5, encoding="utf-8", level="DEBUG")
 
     try:
-        update_task_status("running", pid=os.getpid(), last_started_at=utc_now(), last_error="")
+        update_task_status("running", pid=os.getpid(), last_started_at=cst_now(), last_error="")
         inserted, skipped, total, _batch_min = asyncio.run(collect_startup_news())
     except KeyboardInterrupt:
-        update_task_status("stopped", pid=os.getpid(), last_finished_at=utc_now())
+        update_task_status("stopped", pid=os.getpid(), last_finished_at=cst_now())
         logger.info("Startup collector stopped by user")
         return
     except Exception as exc:
-        update_task_status("error", pid=os.getpid(), last_finished_at=utc_now(), last_error=str(exc))
+        update_task_status("error", pid=os.getpid(), last_finished_at=cst_now(), last_error=str(exc))
         raise
 
     update_task_status(
@@ -194,7 +197,7 @@ def main() -> None:
         skipped=skipped,
         total=total,
         pid=os.getpid(),
-        last_finished_at=utc_now(),
+        last_finished_at=cst_now(),
         last_error="",
     )
     print(f"Inserted: {inserted}")

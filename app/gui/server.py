@@ -87,16 +87,11 @@ from loguru import logger
 
 from app.config import get_settings
 from app.storage.database import connect, init_db
-from app.storage.sync_task_repository import SyncTaskRepository
-from app.storage.task_status import TaskStatusRepository, utc_now
+from app.storage.task_status import cst_now
 
 
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
-BROWSER_KEEPER_TASK = "browser_keeper"
-CONTINUOUS_TASK = "continuous_collector"
-RUN_ONCE_TASK = "startup_collector"
-SYNC_RUNNER_TASK = "sync_task_runner"
 
 
 def row_to_dict(row: Any) -> dict[str, Any]:
@@ -128,7 +123,7 @@ def safe_print(message: str) -> None:
         logger.info(message)
 
 
-_AUTO_RESTART_MODULES: dict[str, str] = {}  # populated after constants are defined
+_AUTO_RESTART_MODULES: dict[str, str] = {}  # 常量定义后填充
 
 
 class TaskManager:
@@ -141,7 +136,7 @@ class TaskManager:
         self._shutdown = False
 
     def append_log(self, message: str) -> None:
-        line = f"{utc_now()} {message}".strip()
+        line = f"{cst_now()} {message}".strip()
         with self.lock:
             self.logs.append(line)
             clients = list(self._sse_queues)
@@ -205,7 +200,6 @@ class TaskManager:
             self.append_log(f"{task_name} started pid={process.pid}")
             threading.Thread(target=self._stream_output, args=(task_name, process), daemon=True).start()
 
-        self._update_task_status(task_name, "running", pid=process.pid, last_started_at=utc_now(), last_error="")
         return {"ok": True, "message": f"{task_name} started", "pid": process.pid}
 
     def stop(self, task_name: str) -> dict[str, Any]:
@@ -217,7 +211,6 @@ class TaskManager:
             with self.lock:
                 self.processes.pop(task_name, None)
                 self._stopping.discard(task_name)
-            self._update_task_status(task_name, "stopped", last_finished_at=utc_now())
             return {"ok": True, "message": f"{task_name} is not running"}
 
         self.append_log(f"{task_name} stopping pid={process.pid}")
@@ -228,7 +221,6 @@ class TaskManager:
             process.kill()
             process.wait(timeout=5)
 
-        self._update_task_status(task_name, "stopped", pid=process.pid, last_finished_at=utc_now())
         self.append_log(f"{task_name} stopped pid={process.pid}")
         with self.lock:
             self.processes.pop(task_name, None)
@@ -245,7 +237,6 @@ class TaskManager:
 
         for task_name, process in items:
             if process.poll() is not None:
-                self._update_task_status(task_name, "stopped", pid=process.pid, last_finished_at=utc_now())
                 with self.lock:
                     self.processes.pop(task_name, None)
 
@@ -259,13 +250,11 @@ class TaskManager:
         exit_msg = f"{task_name} exited code={return_code}"
         self.append_log(exit_msg)
         print(exit_msg, flush=True)
-        if return_code != 0 or not self._has_terminal_status(task_name):
-            self._update_task_status(task_name, "stopped", pid=process.pid, last_finished_at=utc_now())
         with self.lock:
             self.processes.pop(task_name, None)
             intentional = task_name in self._stopping
 
-        # Auto-restart designated tasks on unexpected crash
+        # 对意外崩溃的指定任务进行自动重启
         if not intentional and not self._shutdown and task_name in _AUTO_RESTART_MODULES:
             restart_msg = f"{task_name}: crashed (code={return_code}), auto-restarting in 5s"
             self.append_log(restart_msg)
@@ -279,19 +268,6 @@ class TaskManager:
         if module:
             self.start(task_name, module)
 
-    def _update_task_status(self, task_name: str, status: str, **values: object) -> None:
-        settings = get_settings()
-        with closing(connect(settings.database_file)) as connection:
-            init_db(connection)
-            TaskStatusRepository(connection).upsert(task_name, status, **values)
-
-    def _has_terminal_status(self, task_name: str) -> bool:
-        settings = get_settings()
-        with closing(connect(settings.database_file)) as connection:
-            init_db(connection)
-            row = TaskStatusRepository(connection).get(task_name)
-        return bool(row and row["status"] in {"completed", "error", "stopped"})
-
 
 TASK_MANAGER = TaskManager()
 
@@ -302,7 +278,11 @@ def get_stats() -> dict[str, Any]:
         init_db(connection)
         total = connection.execute("SELECT COUNT(*) FROM news").fetchone()[0]
         today = connection.execute(
-            "SELECT COUNT(*) FROM news WHERE date(COALESCE(DatePublished, created_at)) = date('now')"
+            """
+            SELECT COUNT(*) FROM news
+            WHERE DatePublished IS NOT NULL
+              AND date(DatePublished) = date('now', '-4 hours')
+            """
         ).fetchone()[0]
         latest = connection.execute(
             """
@@ -332,9 +312,19 @@ def get_stats() -> dict[str, Any]:
             """
         ).fetchall()
 
-    return {
+        # 当日实时采集（browser / browser_ws）的新闻数
+        collected = connection.execute(
+            """
+            SELECT COUNT(*) FROM news
+            WHERE source_method IN ('browser', 'browser_ws')
+              AND date(fetched_at) = date('now', '+8 hours')
+            """
+        ).fetchone()[0]
+
+        return {
         "total": total,
         "today": today,
+        "collected": collected,
         "latest": row_to_dict(latest),
         "categories": [row_to_dict(row) for row in categories],
         "sources": [row_to_dict(row) for row in sources],
@@ -343,35 +333,40 @@ def get_stats() -> dict[str, Any]:
 
 def list_news(query: dict[str, list[str]]) -> dict[str, Any]:
     settings = get_settings()
-    limit = min(int(query.get("limit", ["80"])[0] or 80), 200)
+    limit = min(int(query.get("limit", ["20"])[0] or 20), 200)
+    offset = max(int(query.get("offset", ["0"])[0] or 0), 0)
     search = (query.get("q", [""])[0] or "").strip()
     category = (query.get("category", [""])[0] or "").strip()
 
     clauses: list[str] = []
     params: list[Any] = []
+
     if search:
         clauses.append("(Title LIKE ? OR Description LIKE ?)")
-        params.extend([f"%{search}%", f"%{search}%"])
+        like = f"%{search}%"
+        params.extend([like, like])
     if category:
         clauses.append("Level = ?")
         params.append(category)
 
-    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    where_clause = "WHERE " + " AND ".join(clauses) if clauses else ""
+    count_sql = f"SELECT COUNT(*) FROM news {where_clause}"
     sql = f"""
         SELECT id, NewsID AS external_id, Title AS title, Description AS content,
                FCName AS source, Level AS category, EURL AS url,
                DatePublished AS published_at, fetched_at, created_at
         FROM news
-        {where_sql}
+        {where_clause}
         ORDER BY COALESCE(DatePublished, fetched_at, created_at) DESC
-        LIMIT ?
+        LIMIT ? OFFSET ?
     """
-    params.append(limit)
 
     with closing(connect(settings.database_file)) as connection:
         init_db(connection)
+        total = connection.execute(count_sql, params).fetchone()[0]
+        params.extend([limit, offset])
         rows = connection.execute(sql, params).fetchall()
-    return {"items": [row_to_dict(row) for row in rows]}
+    return {"items": [row_to_dict(row) for row in rows], "total": total, "offset": offset, "limit": limit}
 
 
 def get_news_detail(news_id: str) -> dict[str, Any]:
@@ -397,16 +392,78 @@ def list_task_statuses() -> dict[str, Any]:
     settings = get_settings()
     with closing(connect(settings.database_file)) as connection:
         init_db(connection)
-        statuses = [row_to_dict(row) for row in TaskStatusRepository(connection).list_all()]
-    return {"items": statuses, "logs": TASK_MANAGER.list_logs()}
+        rows = connection.execute(
+            "SELECT * FROM tasks ORDER BY updated_at DESC"
+        ).fetchall()
+    items = []
+    for row in rows:
+        d = row_to_dict(row)
+        d["task_name"] = f"{d['task_type']}_{d['id']}"
+        items.append(d)
+    return {
+        "items": items,
+        "logs": TASK_MANAGER.list_logs(),
+    }
 
 
-def list_sync_tasks() -> dict[str, Any]:
+def list_history_tasks() -> dict[str, Any]:
     settings = get_settings()
     with closing(connect(settings.database_file)) as connection:
         init_db(connection)
-        tasks = [row_to_dict(row) for row in SyncTaskRepository(connection).list_all()]
-    return {"items": tasks}
+        rows = connection.execute(
+            """
+            SELECT * FROM tasks
+            WHERE task_type = 'history_api'
+            ORDER BY
+              CASE WHEN status IN ('running', 'pending', 'paused') THEN 0 ELSE 1 END,
+              created_at DESC
+            LIMIT 100
+            """
+        ).fetchall()
+    return {"items": [row_to_dict(row) for row in rows]}
+
+
+def list_login_events() -> dict[str, Any]:
+    settings = get_settings()
+    with closing(connect(settings.database_file)) as connection:
+        init_db(connection)
+        rows = connection.execute(
+            "SELECT event, detail, created_at FROM login_events ORDER BY id DESC LIMIT 10"
+        ).fetchall()
+    return {"items": [row_to_dict(row) for row in rows]}
+
+
+def get_memory_stats() -> dict[str, Any]:
+    try:
+        result = subprocess.run(
+            ["ps", "-eo", "pid,%cpu,rss,args"],
+            capture_output=True, text=True, timeout=5,
+        )
+        lines = result.stdout.strip().split("\n")[1:]
+        processes: list[dict[str, Any]] = []
+        pid_map: dict[str, str] = {
+            "robot": "Robot",
+            "server": "GUI Server",
+            "realtime_browser": "实时采集",
+            "history_api": "历史同步",
+        }
+        for line in lines:
+            parts = line.split(None, 3)
+            if len(parts) < 4:
+                continue
+            pid = int(parts[0])
+            cpu_pct = float(parts[1])
+            rss_kb = int(parts[2])
+            args = parts[3].strip()
+            if "python" not in args.lower() and "Python" not in args:
+                continue
+            label = next((name for key, name in pid_map.items() if key in args), "Python")
+            rss_mb = round(rss_kb / 1024, 1)
+            processes.append({"pid": pid, "cpu_pct": cpu_pct, "rss_mb": rss_mb, "label": label})
+        total_mb = round(sum(p["rss_mb"] for p in processes), 1)
+        return {"processes": processes, "total_mb": total_mb}
+    except Exception:
+        return {"processes": [], "total_mb": 0}
 
 
 def get_history_config() -> dict[str, Any]:
@@ -427,10 +484,10 @@ def save_history_config(since: str) -> dict[str, Any]:
         connection.execute(
             """
             INSERT INTO gui_settings (key, value, updated_at)
-            VALUES ('history_since', ?, CURRENT_TIMESTAMP)
+            VALUES ('history_since', ?, ?)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
             """,
-            (since,),
+            (since, cst_now()),
         )
         connection.commit()
     return {"since": since}
@@ -457,10 +514,14 @@ class GuiHandler(BaseHTTPRequestHandler):
             return json_response(self, item or {"error": "not found"}, status)
         if parsed.path == "/api/tasks":
             return json_response(self, list_task_statuses())
-        if parsed.path == "/api/sync-tasks":
-            return json_response(self, list_sync_tasks())
+        if parsed.path == "/api/history-tasks":
+            return json_response(self, list_history_tasks())
+        if parsed.path == "/api/login-events":
+            return json_response(self, list_login_events())
         if parsed.path == "/api/history-config":
             return json_response(self, get_history_config())
+        if parsed.path == "/api/memory":
+            return json_response(self, get_memory_stats())
 
         if parsed.path == "/api/logs/stream":
             return self._serve_sse()
@@ -494,16 +555,6 @@ class GuiHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path == "/api/tasks/continuous/start":
-            return json_response(self, TASK_MANAGER.start(CONTINUOUS_TASK, "app.collectors.continuous_collector"))
-        if parsed.path == "/api/tasks/continuous/stop":
-            return json_response(self, TASK_MANAGER.stop(CONTINUOUS_TASK))
-        if parsed.path == "/api/tasks/startup/run":
-            return json_response(self, TASK_MANAGER.start(RUN_ONCE_TASK, "app.collectors.startup_collector"))
-        if parsed.path == "/api/tasks/sync-runner/start":
-            return json_response(self, TASK_MANAGER.start(SYNC_RUNNER_TASK, "app.collectors.sync_task_runner"))
-        if parsed.path == "/api/tasks/sync-runner/stop":
-            return json_response(self, TASK_MANAGER.stop(SYNC_RUNNER_TASK))
         if parsed.path == "/api/history-config":
             payload = self._read_json_body()
             since = str(payload.get("since") or "")
@@ -541,21 +592,88 @@ class GuiHandler(BaseHTTPRequestHandler):
         return payload if isinstance(payload, dict) else {}
 
 
+def _shutdown_all_tasks() -> None:
+    """杀死所有剩余的任务进程，并将所有运行中/待处理的任务标记为已停止。"""
+    settings = get_settings()
+    try:
+        with closing(connect(settings.database_file)) as conn:
+            init_db(conn)
+            rows = conn.execute(
+                "SELECT id, pid FROM tasks WHERE status IN ('running', 'pending')"
+            ).fetchall()
+            for row in rows:
+                pid = row["pid"]
+                if pid:
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+            conn.execute(
+                "UPDATE tasks SET status='stopped', last_finished_at=? "
+                "WHERE status IN ('running', 'pending')",
+                (cst_now(),),
+            )
+            conn.commit()
+            logger.info("server: marked {} task(s) stopped", len(rows))
+    except Exception as exc:
+        logger.warning("server: _shutdown_all_tasks error: {}", exc)
+
+
 def main() -> None:
     settings = get_settings()
-    Path("data/logs").mkdir(parents=True, exist_ok=True)
-    logger.add("data/logs/server.log", rotation="10 MB", retention=5, encoding="utf-8", level="DEBUG")
+    settings.log_dir.mkdir(parents=True, exist_ok=True)
+    logger.add(str(settings.log_dir / "server.log"), rotation="10 MB", retention=5, encoding="utf-8", level="DEBUG")
 
     with closing(connect(settings.database_file)) as connection:
         init_db(connection)
 
-    _AUTO_RESTART_MODULES[BROWSER_KEEPER_TASK] = "app.collectors.browser_keeper"
-    _AUTO_RESTART_MODULES[SYNC_RUNNER_TASK] = "app.collectors.sync_task_runner"
-    TASK_MANAGER.start(BROWSER_KEEPER_TASK, "app.collectors.browser_keeper")
-    TASK_MANAGER.start(SYNC_RUNNER_TASK, "app.collectors.sync_task_runner")
+    # 检查是否已有外部运行的 robot 进程（如 watchdog 启动的）
+    robot_already_running = False
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "python.*app\\.robot\\.robot"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            robot_already_running = True
+            safe_print(f"Robot already running (pgrep matched), skipping launch")
+            logger.info("server: robot already running, will not start another")
+        else:
+            # 回退：检查 gui_settings.robot_pid
+            with closing(connect(settings.database_file)) as conn:
+                init_db(conn)
+                row = conn.execute(
+                    "SELECT value FROM gui_settings WHERE key = 'robot_pid'"
+                ).fetchone()
+            if row and (row["value"] or "").strip():
+                existing_pid = int(row["value"])
+                try:
+                    os.kill(existing_pid, 0)
+                    robot_already_running = True
+                    safe_print(f"Robot already running (pid={existing_pid}), skipping launch")
+                    logger.info("server: robot already running pid={}", existing_pid)
+                except ProcessLookupError:
+                    pass
+    except Exception:
+        pass
 
-    server = ThreadingHTTPServer((settings.gui_host, settings.gui_port), GuiHandler)
+    if not robot_already_running:
+        TASK_MANAGER.start("robot", "app.robot.robot")
+    _AUTO_RESTART_MODULES["robot"] = "app.robot.robot"
+
     url = f"http://{settings.gui_host}:{settings.gui_port}"
+    try:
+        server = ThreadingHTTPServer((settings.gui_host, settings.gui_port), GuiHandler)
+    except OSError as exc:
+        if exc.errno == 48:  # Address already in use
+            safe_print(f"GUI already running at {url}")
+            safe_print(f"Opening {url} …")
+            logger.info("server: port {} already in use, opening browser", settings.gui_port)
+            import webbrowser
+            webbrowser.open(url)
+            sys.exit(0)
+        raise
+
     safe_print(f"FinancialJuice GUI running at {url}")
     logger.info("FinancialJuice GUI running at {}", url)
     try:
@@ -564,10 +682,8 @@ def main() -> None:
         pass
     finally:
         TASK_MANAGER._shutdown = True
-        TASK_MANAGER.stop(BROWSER_KEEPER_TASK)
-        TASK_MANAGER.stop(SYNC_RUNNER_TASK)
-        TASK_MANAGER.stop(CONTINUOUS_TASK)
-        TASK_MANAGER.stop(RUN_ONCE_TASK)
+        TASK_MANAGER.stop("robot")
+        _shutdown_all_tasks()
         server.server_close()
 
 

@@ -35,8 +35,8 @@ RAW_COLUMNS = [
     "IID",
 ]
 
-# Fallback values for NOT NULL columns when the API returns null/missing.
-# Nullable columns (STID, RID, FCID, STRID, DatePublished) are omitted → stay None.
+# 当 API 返回 null/缺失时，为 NOT NULL 列提供的回退值。
+# 可空列（STID, RID, FCID, STRID, DatePublished）被省略 → 保持 None。
 _NOT_NULL_DEFAULTS: dict[str, Any] = {
     "Tags": "[]", "StreamIDs": "[]", "TickerIDs": "[]", "Labels": "[]",
     "Breaking": 0, "HasE": 0,
@@ -59,7 +59,7 @@ class NewsRepository:
         self.connection = connection
         self.table = table
 
-    def insert_many(self, items: list[NewsItem]) -> tuple[int, int, list[int], int | None]:
+    def insert_many(self, items: list[NewsItem], source_method: str = "", task_id: int = 0) -> tuple[int, int, list[int], int | None]:
         inserted = 0
         skipped = 0
         new_ids: list[int] = []
@@ -67,7 +67,7 @@ class NewsRepository:
 
         for item in items:
             raw = item.raw_payload
-            columns = [*RAW_COLUMNS, "fetched_at", "created_at"]
+            columns = [*RAW_COLUMNS, "fetched_at", "created_at", "source_method", "task_id"]
             placeholders = ", ".join("?" for _ in columns)
             column_sql = ", ".join(columns)
             values = [
@@ -75,8 +75,8 @@ class NewsRepository:
                 else _NOT_NULL_DEFAULTS.get(column)
                 for column in RAW_COLUMNS
             ]
-            fetched_at = item.fetched_at.isoformat()
-            values.extend([fetched_at, fetched_at])
+            fetched_at = item.fetched_at.strftime("%Y-%m-%d %H:%M:%S")
+            values.extend([fetched_at, fetched_at, source_method, task_id])
             cursor = self.connection.execute(
                 f"INSERT OR IGNORE INTO {self.table} ({column_sql}) VALUES ({placeholders})",
                 values,
@@ -113,9 +113,9 @@ class NewsRepository:
 
     def find_block_bottom(self, top_id: int, since_iso: str) -> int | None:
         """
-        If top_id exists in DB, return the minimum NewsID of its contiguous island.
-        Used to jump over already-synced ranges during history sync.
-        Requires NewsID to be monotonically increasing with date.
+        如果 top_id 存在于数据库中，返回其连续数据块的最小 NewsID。
+        用于在历史同步时跳过已同步的范围。
+        要求 NewsID 随日期单调递增。
         """
         row = self.connection.execute(
             f"SELECT 1 FROM {self.table} WHERE NewsID = ?", (top_id,)
