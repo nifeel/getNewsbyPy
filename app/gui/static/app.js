@@ -70,10 +70,23 @@ function taskLabel(type) {
   return labels[type] || type || "未知";
 }
 
+function formatCookieRemaining(seconds) {
+  if (seconds == null || Number.isNaN(Number(seconds))) return "-";
+  const value = Number(seconds);
+  if (value <= 0) return "已过期";
+  const days = Math.floor(value / 86400);
+  const hours = Math.floor((value % 86400) / 3600);
+  if (days > 0) return `${days}天 ${hours}小时`;
+  const minutes = Math.floor((value % 3600) / 60);
+  if (hours > 0) return `${hours}小时 ${minutes}分`;
+  return `${minutes}分`;
+}
+
 function renderStats(stats) {
   $("totalCount").textContent = stats.total ?? 0;
   $("todayCount").textContent = stats.today ?? 0;
   $("collectedCount").textContent = stats.collected ?? 0;
+  $("cookieRemaining").textContent = formatCookieRemaining(stats.cookie_remaining_seconds);
   $("latestTitle").textContent = stats.latest?.title || "-";
 
   state.categories = stats.categories || [];

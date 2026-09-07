@@ -1,4 +1,3 @@
-import sqlite3
 from pathlib import Path
 
 from app.storage.task_status import cst_now
@@ -15,8 +14,6 @@ def write_task_log(
 
     该表由 ``app.storage.database.init_db()`` 创建。
     """
-    import sqlite3
-
     from app.storage.database import connect, init_db
 
     with connect(database_path) as conn:

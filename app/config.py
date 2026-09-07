@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     target_url: str = "https://www.financialjuice.com/home"
     storage_state_path: Path = Field(default=_PROJECT_ROOT / "data" / "storage_state.json")
     database_path: Path = Field(default=_PROJECT_ROOT / "data" / "news.db")
+    database_url: str | None = None
     network_log_path: Path = Field(default=_PROJECT_ROOT / "data" / "logs" / "network_sniffer.log")
     startup_api_cache_path: Path = Field(default=_PROJECT_ROOT / "data" / "startup_api_url.txt")
     user_data_dir: Path = Field(default=_PROJECT_ROOT / "data" / "browser_profile")
@@ -28,6 +29,14 @@ class Settings(BaseSettings):
     def _make_absolute(cls, v: object) -> Path:
         p = Path(str(v))
         return p if p.is_absolute() else _PROJECT_ROOT / p
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def _empty_url_to_none(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        text = str(v).strip()
+        return text or None
     browser_channel: str | None = Field(default="chrome")
     headless: bool = False
     account: str | None = None
@@ -53,6 +62,13 @@ class Settings(BaseSettings):
     browser_restart_hours: int = 6
     browser_max_memory_mb: int = 200
     browser_memory_optimize: bool = False
+    tmt_secret_id: str | None = Field(default=None, repr=False)
+    tmt_secret_key: str | None = Field(default=None, repr=False)
+    tmt_secret_id_2: str | None = Field(default=None, repr=False)
+    tmt_secret_key_2: str | None = Field(default=None, repr=False)
+    tmt_region: str = "ap-guangzhou"
+    tmt_api_host: str = "0.0.0.0"
+    tmt_api_port: int = 8765
 
     @property
     def storage_state_file(self) -> Path:

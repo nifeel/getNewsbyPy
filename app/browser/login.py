@@ -2,10 +2,10 @@ import asyncio
 import re
 
 from loguru import logger
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError, async_playwright
+from playwright.async_api import BrowserContext, Page, TimeoutError as PlaywrightTimeoutError, async_playwright
 
-from app.browser.context import background_window_args, block_images
-from app.browser.session import ensure_parent_dir
+from app.browser.context import BROWSER_VIEWPORT, background_window_args, block_images
+from app.browser.session import ensure_parent_dir, persist_cookie_expiry
 from app.config import get_settings
 
 
@@ -67,6 +67,7 @@ async def _save_context_state(context: BrowserContext) -> None:
     settings = get_settings()
     ensure_parent_dir(settings.storage_state_file)
     await context.storage_state(path=str(settings.storage_state_file))
+    persist_cookie_expiry(settings.storage_state_file)
     logger.info("Saved login state to {}", settings.storage_state_file)
 
 
@@ -95,6 +96,7 @@ async def save_login_state() -> None:
         input("> ")
 
         await context.storage_state(path=str(storage_state_path))
+        persist_cookie_expiry(storage_state_path)
         logger.info("Saved login state to {}", storage_state_path)
 
         await context.close()
@@ -116,7 +118,7 @@ async def save_login_state_with_credentials() -> None:
             channel=settings.browser_channel,
             headless=settings.headless,
             args=background_window_args(settings.headless),
-            viewport={"width": 1920, "height": 1080},
+            viewport=BROWSER_VIEWPORT,
             user_agent=(
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "

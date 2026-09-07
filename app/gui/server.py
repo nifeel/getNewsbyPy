@@ -11,6 +11,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import metadata
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -95,7 +96,12 @@ STATIC_DIR = ROOT / "static"
 
 
 def row_to_dict(row: Any) -> dict[str, Any]:
-    return dict(row) if row is not None else {}
+    if row is None:
+        return {}
+    to_dict = getattr(row, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    return dict(row)
 
 
 def json_response(handler: BaseHTTPRequestHandler, payload: Any, status: int = 200) -> None:
@@ -277,12 +283,15 @@ def get_stats() -> dict[str, Any]:
     with closing(connect(settings.database_file)) as connection:
         init_db(connection)
         total = connection.execute("SELECT COUNT(*) FROM news").fetchone()[0]
+        today_et = (datetime.now(timezone.utc) - timedelta(hours=4)).strftime("%Y-%m-%d")
+        today_cst = (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
         today = connection.execute(
             """
             SELECT COUNT(*) FROM news
             WHERE DatePublished IS NOT NULL
-              AND date(DatePublished) = date('now', '-4 hours')
-            """
+              AND substr(DatePublished, 1, 10) = ?
+            """,
+            (today_et,),
         ).fetchone()[0]
         latest = connection.execute(
             """
@@ -317,9 +326,25 @@ def get_stats() -> dict[str, Any]:
             """
             SELECT COUNT(*) FROM news
             WHERE source_method IN ('browser', 'browser_ws')
-              AND date(fetched_at) = date('now', '+8 hours')
-            """
+              AND substr(fetched_at, 1, 10) = ?
+            """,
+            (today_cst,),
         ).fetchone()[0]
+        cookie_row = connection.execute(
+            "SELECT value FROM gui_settings WHERE key = 'cookie_expires_at'"
+        ).fetchone()
+        cookie_expires_at = (cookie_row["value"] if cookie_row else "") or ""
+        cookie_remaining_seconds = None
+        if cookie_expires_at:
+            try:
+                expires = datetime.fromisoformat(cookie_expires_at.replace("Z", "+00:00"))
+                if expires.tzinfo is None:
+                    expires = expires.replace(tzinfo=timezone.utc)
+                cookie_remaining_seconds = int(
+                    (expires - datetime.now(timezone.utc)).total_seconds()
+                )
+            except ValueError:
+                cookie_remaining_seconds = None
 
         return {
         "total": total,
@@ -328,6 +353,8 @@ def get_stats() -> dict[str, Any]:
         "latest": row_to_dict(latest),
         "categories": [row_to_dict(row) for row in categories],
         "sources": [row_to_dict(row) for row in sources],
+        "cookie_expires_at": cookie_expires_at,
+        "cookie_remaining_seconds": cookie_remaining_seconds,
     }
 
 
@@ -352,7 +379,8 @@ def list_news(query: dict[str, list[str]]) -> dict[str, Any]:
     where_clause = "WHERE " + " AND ".join(clauses) if clauses else ""
     count_sql = f"SELECT COUNT(*) FROM news {where_clause}"
     sql = f"""
-        SELECT id, NewsID AS external_id, Title AS title, Description AS content,
+        SELECT id, NewsID AS external_id, Title AS title, title_zh,
+               Description AS content,
                FCName AS source, Level AS category, EURL AS url,
                DatePublished AS published_at, fetched_at, created_at
         FROM news

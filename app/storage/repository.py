@@ -59,11 +59,28 @@ class NewsRepository:
         self.connection = connection
         self.table = table
 
-    def insert_many(self, items: list[NewsItem], source_method: str = "", task_id: int = 0) -> tuple[int, int, list[int], int | None]:
+    def _existing_titles(self, news_ids: list[int]) -> dict[int, str]:
+        if not news_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in news_ids)
+        rows = self.connection.execute(
+            f"SELECT NewsID, Title FROM {self.table} WHERE NewsID IN ({placeholders})",
+            news_ids,
+        ).fetchall()
+        return {int(row["NewsID"]): str(row["Title"] or "") for row in rows}
+
+    def insert_many(self, items: list[NewsItem], source_method: str = "", task_id: int = 0) -> tuple[int, int, list[int], int | None, list[int]]:
         inserted = 0
         skipped = 0
         new_ids: list[int] = []
+        translate_ids: list[int] = []
         min_skipped_id: int | None = None
+        batch_ids = [
+            int(item.raw_payload["NewsID"])
+            for item in items
+            if item.raw_payload.get("NewsID") is not None
+        ]
+        existing_titles = self._existing_titles(batch_ids)
 
         for item in items:
             raw = item.raw_payload
@@ -77,25 +94,37 @@ class NewsRepository:
             ]
             fetched_at = item.fetched_at.strftime("%Y-%m-%d %H:%M:%S")
             values.extend([fetched_at, fetched_at, source_method, task_id])
-            cursor = self.connection.execute(
-                f"INSERT OR IGNORE INTO {self.table} ({column_sql}) VALUES ({placeholders})",
+            self.connection.execute(
+                f"INSERT INTO {self.table} ({column_sql}) VALUES ({placeholders}) "
+                "ON CONFLICT (NewsID) DO UPDATE SET "
+                "Title = EXCLUDED.Title, "
+                "Level = EXCLUDED.Level, "
+                "Description = EXCLUDED.Description, "
+                "Breaking = EXCLUDED.Breaking, "
+                f"title_zh = CASE WHEN {self.table}.Title IS DISTINCT FROM EXCLUDED.Title "
+                f"THEN NULL ELSE {self.table}.title_zh END",
                 values,
             )
-            if cursor.rowcount:
+            news_id = raw.get("NewsID")
+            if news_id is None:
+                continue
+            nid = int(news_id)
+            new_title = str(raw.get("Title") or "")
+            old_title = existing_titles.get(nid)
+            if old_title is None:
                 inserted += 1
-                news_id = raw.get("NewsID")
-                if news_id is not None:
-                    new_ids.append(int(news_id))
+                new_ids.append(nid)
+                translate_ids.append(nid)
             else:
                 skipped += 1
-                news_id = raw.get("NewsID")
-                if news_id is not None:
-                    nid = int(news_id)
-                    if min_skipped_id is None or nid < min_skipped_id:
-                        min_skipped_id = nid
+                if min_skipped_id is None or nid < min_skipped_id:
+                    min_skipped_id = nid
+                if new_title != old_title:
+                    translate_ids.append(nid)
+            existing_titles[nid] = new_title
 
         self.connection.commit()
-        return inserted, skipped, new_ids, min_skipped_id
+        return inserted, skipped, new_ids, min_skipped_id, translate_ids
 
     def count(self) -> int:
         cursor = self.connection.execute(f"SELECT COUNT(*) FROM {self.table}")

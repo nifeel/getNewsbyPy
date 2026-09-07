@@ -18,6 +18,7 @@ from app.collectors.startup_api_client import (
     write_cached_startup_url,
 )
 from app.parsers.financialjuice import parse_startup_payload
+from app.services.translate_tmt import schedule_fill_title_zh
 from app.storage.database import connect, init_db, SOURCE_METHOD_STARTUP
 from app.storage.repository import NewsRepository
 from app.storage.task_status import TaskStatusRepository, cst_now
@@ -162,7 +163,7 @@ def store_startup_payload(payload: dict[str, Any], task_id: int = 0) -> tuple[in
     with closing(connect(settings.database_file)) as connection:
         init_db(connection)
         repository = NewsRepository(connection)
-        inserted, skipped, new_ids, min_skipped_id = repository.insert_many(
+        inserted, skipped, new_ids, min_skipped_id, translate_ids = repository.insert_many(
             items, source_method=SOURCE_METHOD_STARTUP, task_id=task_id,
         )
         total = repository.count()
@@ -170,6 +171,8 @@ def store_startup_payload(payload: dict[str, Any], task_id: int = 0) -> tuple[in
     batch_min = _batch_min_id(items)
     if new_ids:
         print(f"new NewsIDs: {new_ids}", flush=True)
+    if translate_ids:
+        schedule_fill_title_zh(translate_ids)
     if skipped > 0 and min_skipped_id is not None:
         print(f"skipped={skipped} min_skipped_id={min_skipped_id}", flush=True)
     return inserted, skipped, total, batch_min

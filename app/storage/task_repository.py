@@ -25,11 +25,13 @@ class TaskRepository:
                 status, created_at, updated_at
             )
             VALUES (?, ?, ?, ?, 'pending', ?, ?)
+            RETURNING id
             """,
             (task_type, start_news_id, end_news_id, end_time, now, now),
         )
+        row = cursor.fetchone()
         self.connection.commit()
-        return cursor.lastrowid  # type: ignore[return-value]
+        return int(row["id"])
 
     def update(
         self,

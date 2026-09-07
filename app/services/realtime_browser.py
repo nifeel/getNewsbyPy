@@ -21,16 +21,17 @@ from contextlib import closing
 from loguru import logger
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError, async_playwright
 
-from app.browser.context import background_window_args, block_images
+from app.browser.context import BROWSER_VIEWPORT, background_window_args, block_images, reap_orphan_chromes
 from app.browser.login import (
     AutomatedLoginFailed,
     LoginCredentialsMissing,
     _save_context_state,
 )
-from app.browser.session import ensure_parent_dir
+from app.browser.session import persist_cookie_expiry
 from app.collectors.startup_api_client import NEWS_ENDPOINT_MARKERS
 from app.config import get_settings
 from app.parsers.financialjuice import parse_startup_payload
+from app.services.translate_tmt import schedule_fill_title_zh
 from app.storage.database import connect, init_db, SOURCE_METHOD_BROWSER, SOURCE_METHOD_BROWSER_WS
 from app.storage.repository import NewsRepository
 from app.storage.task_log import write_task_log
@@ -180,7 +181,7 @@ async def _handle_news_response(
         with closing(connect(settings.database_file)) as conn:
             init_db(conn)
             repo = NewsRepository(conn)
-            inserted, skipped, new_ids, min_skipped_id = repo.insert_many(
+            inserted, skipped, new_ids, min_skipped_id, translate_ids = repo.insert_many(
                 items, source_method=SOURCE_METHOD_BROWSER, task_id=task_id
             )
             max_inserted_id = max(new_ids) if new_ids else None
@@ -193,6 +194,8 @@ async def _handle_news_response(
     if new_ids:
         logger.warning("realtime_browser: *** DB wrote {} news | ids={} ***", inserted, new_ids)
         print(f"realtime_browser new NewsIDs: {new_ids}", flush=True)
+    if translate_ids:
+        schedule_fill_title_zh(translate_ids)
     if skipped > 0 and min_skipped_id is not None:
         print(f"realtime_browser skipped={skipped} min_skipped_id={min_skipped_id}", flush=True)
     if max_inserted_id is not None:
@@ -258,7 +261,7 @@ def _handle_ws_frame(
         with closing(connect(settings.database_file)) as conn:
             init_db(conn)
             repo = NewsRepository(conn)
-            inserted, skipped, new_ids, min_skipped_id = repo.insert_many(
+            inserted, skipped, new_ids, min_skipped_id, translate_ids = repo.insert_many(
                 items, source_method=SOURCE_METHOD_BROWSER_WS, task_id=task_id
             )
     except Exception as exc:
@@ -270,6 +273,8 @@ def _handle_ws_frame(
     if new_ids:
         logger.warning("realtime_browser: *** DB wrote {} news (ws) | ids={} ***", inserted, new_ids)
         print(f"realtime_browser ws new NewsIDs: {new_ids}", flush=True)
+    if translate_ids:
+        schedule_fill_title_zh(translate_ids)
     max_inserted_id = max(new_ids) if new_ids else None
     if max_inserted_id is not None:
         try:
@@ -466,6 +471,8 @@ async def run_realtime_browser(task_id: int) -> None:
         )
 
     collect_stats: dict = {"inserted": 0, "skipped": 0, "cycles": 0}
+    reap_orphan_chromes()
+    persist_cookie_expiry(settings.storage_state_file)
 
     async with async_playwright() as pw:
         while True:  # 重启循环 — 在 KeyboardInterrupt 时退出
@@ -483,7 +490,7 @@ async def run_realtime_browser(task_id: int) -> None:
             )
             context = await browser.new_context(
                 storage_state=storage_state,
-                viewport={"width": 1920, "height": 1080},
+                viewport=BROWSER_VIEWPORT,
                 user_agent=(
                     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -669,6 +676,7 @@ async def run_realtime_browser(task_id: int) -> None:
                         TaskRepository(conn).update(
                             task_id, "running", pid=os.getpid(), last_error=""
                         )
+                    await _save_context_state(context)
     
             try:
                 while True:
@@ -719,16 +727,18 @@ async def run_realtime_browser(task_id: int) -> None:
                 break
             finally:
                 try:
-                    ensure_parent_dir(settings.storage_state_file)
-                    await context.storage_state(path=str(settings.storage_state_file))
-                    logger.info(
-                        "realtime_browser: saved storage state to {}",
-                        settings.storage_state_file,
-                    )
+                    await _save_context_state(context)
                 except Exception:
                     pass
-                await context.close()
-                await browser.close()
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+                reap_orphan_chromes()
 
     with closing(connect(settings.database_file)) as conn:
         init_db(conn)

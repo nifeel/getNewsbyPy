@@ -38,6 +38,7 @@ from app.storage.repository import NewsRepository
 from app.storage.task_repository import TaskRepository
 from app.storage.task_status import cst_now
 from app.services.login_utils import read_login_status, wait_for_login
+from app.services.translate_tmt import schedule_fill_title_zh
 
 
 async def _resolve_url() -> str:
@@ -73,6 +74,35 @@ async def _fetch(url: str) -> dict[str, Any]:
     raise LoginRequiredError("Login failed after retries")
 
 
+def advance_history_cursor(current_news_id: int, batch_min_id: int) -> int | None:
+    """计算下一页 oldID。
+
+    API 返回页通常包含 cursor 自身；正常情况最小 ID 会小于 cursor。
+    若最小 ID 没有前进（例如 cursor 恰好是该页最小 ID），则退一格继续翻。
+    已退到 1 仍无法前进时返回 None。
+    """
+    if batch_min_id < current_news_id:
+        return batch_min_id
+    if current_news_id <= 1:
+        return None
+    return current_news_id - 1
+
+
+def history_resume_start_id(
+    *,
+    target_reached: bool,
+    checkpoints: list[int],
+    latest_news_id: int,
+) -> int | None:
+    """为新的长历史任务选择起点。已到达 cutoff 时返回 None（不再开新任务）。"""
+    if target_reached:
+        return None
+    positive = [n for n in checkpoints if n > 0]
+    if positive:
+        return min(positive)
+    return latest_news_id
+
+
 def _page_oldest_item(items: list[NewsItem]) -> NewsItem | None:
     dated = [item for item in items if item.published_at is not None]
     if dated:
@@ -92,11 +122,13 @@ def _insert_items(items, source_method: str = SOURCE_METHOD_HISTORY, task_id: in
     settings = get_settings()
     with closing(connect(settings.database_file)) as conn:
         init_db(conn)
-        inserted, skipped, new_ids, min_skipped_id = NewsRepository(conn).insert_many(
+        inserted, skipped, new_ids, min_skipped_id, translate_ids = NewsRepository(conn).insert_many(
             items, source_method=source_method, task_id=task_id
         )
     if new_ids:
         print(f"history_api new NewsIDs: {new_ids}", flush=True)
+    if translate_ids:
+        schedule_fill_title_zh(translate_ids)
     if skipped > 0 and min_skipped_id is not None:
         print(
             f"history_api skipped={skipped} min_skipped_id={min_skipped_id}",
@@ -128,14 +160,8 @@ async def run_history_api(task_id: int) -> None:
 
     end_time_str: str | None = task_row["end_time"]
     end_news_id: int | None = task_row["end_news_id"]
-    # 优先从 news 表查询该任务实际存储的最大 NewsID，确保从已持久化的位置继续
-    with closing(connect(settings.database_file)) as conn:
-        init_db(conn)
-        row = conn.execute(
-            "SELECT MAX(NewsID) AS max_id FROM news WHERE task_id = ?", (task_id,)
-        ).fetchone()
-    db_max_for_task: int | None = int(row["max_id"]) if row and row["max_id"] else None
-    current_news_id: int = db_max_for_task or task_row["start_news_id"] or 0
+    # 历史是往更小 NewsID 翻页，断点用 current_news_id，不能用该任务插入过的 MAX(NewsID)
+    current_news_id: int = int(task_row["current_news_id"] or task_row["start_news_id"] or 0)
     inserted_total: int = 0
     skipped_total: int = 0
 
@@ -293,7 +319,30 @@ async def run_history_api(task_id: int) -> None:
 
         oldest_item = _page_oldest_item(items)
         oldest_at = oldest_item.published_at if oldest_item else None
-        next_id = _batch_min_id(items, current_news_id)
+        batch_min_id = _batch_min_id(items, current_news_id)
+        next_id = advance_history_cursor(current_news_id, batch_min_id)
+        if next_id is None:
+            logger.warning(
+                "history_api: task_id={} stalled at old_id={}, marking completed",
+                task_id,
+                current_news_id,
+            )
+            with closing(connect(settings.database_file)) as conn:
+                init_db(conn)
+                TaskRepository(conn).update(
+                    task_id, "completed", pages=pages,
+                    inserted=inserted_total, skipped=skipped_total,
+                    message=f"completed (stall): old_id={current_news_id}",
+                    last_finished_at=cst_now(), last_error="",
+                )
+            break
+        if next_id != batch_min_id:
+            logger.warning(
+                "history_api: task_id={} cursor stuck at old_id={}, stepping to {}",
+                task_id,
+                current_news_id,
+                next_id,
+            )
 
         with closing(connect(settings.database_file)) as conn:
             init_db(conn)
@@ -324,7 +373,7 @@ async def run_history_api(task_id: int) -> None:
         )
 
         # 停止条件：回溯到断档边界
-        if end_news_id is not None and next_id <= end_news_id:
+        if end_news_id is not None and batch_min_id <= end_news_id:
             logger.info(
                 "history_api: task_id={} complete: reached end_news_id={}",
                 task_id,
@@ -357,23 +406,6 @@ async def run_history_api(task_id: int) -> None:
                     task_id, "completed", pages=pages,
                     inserted=inserted_total, skipped=skipped_total,
                     message=f"completed: reached end_time={end_time_str}",
-                    last_finished_at=cst_now(), last_error="",
-                )
-            break
-
-        # 保护：停滞检测（next_id 应小于 current）
-        if next_id >= current_news_id:
-            logger.warning(
-                "history_api: task_id={} stalled at old_id={}, marking completed",
-                task_id,
-                next_id,
-            )
-            with closing(connect(settings.database_file)) as conn:
-                init_db(conn)
-                TaskRepository(conn).update(
-                    task_id, "completed", pages=pages,
-                    inserted=inserted_total, skipped=skipped_total,
-                    message=f"completed (stall): old_id={next_id}",
                     last_finished_at=cst_now(), last_error="",
                 )
             break

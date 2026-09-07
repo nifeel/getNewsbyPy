@@ -29,6 +29,7 @@ from loguru import logger
 
 from app.collectors.startup_collector import collect_startup_news
 from app.config import get_settings
+from app.services.history_api import history_resume_start_id
 from app.services.login_utils import read_login_status, wait_for_login
 from app.storage.database import connect, init_db
 from app.storage.repository import NewsRepository
@@ -117,6 +118,7 @@ def start_service(task_type: str, task_id: int | None = None) -> subprocess.Pope
         errors="replace",
         bufsize=1,
         startupinfo=startupinfo,
+        start_new_session=(os.name != "nt"),
     )
 
     key = _proc_key(task_type, task_id)
@@ -142,20 +144,38 @@ def _stream_output(key: str, proc: subprocess.Popen) -> None:
     logger.info("robot: {} exited code={}", key, rc)
 
 
+def _terminate_proc(proc: subprocess.Popen) -> None:
+    """结束子进程及其进程组（Chrome 是采集进程的孙进程）。"""
+    if proc.poll() is not None:
+        return
+    if os.name != "nt" and proc.pid:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            proc.terminate()
+    else:
+        proc.terminate()
+    try:
+        proc.wait(timeout=8)
+    except subprocess.TimeoutExpired:
+        if os.name != "nt" and proc.pid:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                proc.kill()
+        else:
+            proc.kill()
+        proc.wait(timeout=5)
+
+
 def _stop_process(key: str) -> None:
     """优雅地终止一个被跟踪的子进程。"""
     proc = processes.pop(key, None)
     if proc is None:
         return
     _stopping.add(key)
-    if proc.poll() is None:
-        logger.info("robot: stopping {} pid={}", key, proc.pid)
-        proc.terminate()
-        try:
-            proc.wait(timeout=8)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5)
+    logger.info("robot: stopping {} pid={}", key, proc.pid)
+    _terminate_proc(proc)
     _stopping.discard(key)
 
 
@@ -351,6 +371,41 @@ def _get_all_incomplete_history() -> list:
     with closing(connect(settings.database_file)) as conn:
         init_db(conn)
         return TaskRepository(conn).get_all_incomplete_history()
+
+
+def _history_target_reached(history_since: str) -> bool:
+    settings = get_settings()
+    with closing(connect(settings.database_file)) as conn:
+        init_db(conn)
+        row = conn.execute(
+            """
+            SELECT 1 FROM tasks
+            WHERE task_type = 'history_api'
+              AND end_time = ?
+              AND status = 'completed'
+              AND message LIKE 'completed: reached end_time%'
+            LIMIT 1
+            """,
+            (history_since,),
+        ).fetchone()
+    return row is not None
+
+
+def _history_checkpoints(history_since: str) -> list[int]:
+    settings = get_settings()
+    with closing(connect(settings.database_file)) as conn:
+        init_db(conn)
+        rows = conn.execute(
+            """
+            SELECT current_news_id FROM tasks
+            WHERE task_type = 'history_api'
+              AND end_time = ?
+              AND current_news_id IS NOT NULL
+              AND current_news_id > 0
+            """,
+            (history_since,),
+        ).fetchall()
+    return [int(row["current_news_id"]) for row in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -672,6 +727,7 @@ def _monitor_tick(prev_login_status: str) -> None:
         # ------------------------------------------------------------------
         # 4. 历史任务调度（仅登录状态下执行）
         # ------------------------------------------------------------------
+        _ensure_history_task_exists()
         _maybe_dispatch_next_history()
 
 
@@ -691,12 +747,7 @@ def _pause_all_running() -> None:
         proc = processes.get(key)
         if proc and proc.poll() is None:
             _stopping.add(key)
-            proc.terminate()
-            try:
-                proc.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=5)
+            _terminate_proc(proc)
             _stopping.discard(key)
             processes.pop(key, None)
 
@@ -809,10 +860,21 @@ def _ensure_history_task_exists() -> None:
     if _has_active_task("history_api"):
         return
     history_since = _get_gui_setting("history_since", "")
-    if history_since:
-        latest_news_id = _db_max_news_id()
-        _create_task("history_api", start_news_id=latest_news_id, end_time=history_since)
-        logger.info("robot: ensured history_api task (history_since={})", history_since)
+    if not history_since:
+        return
+    start_id = history_resume_start_id(
+        target_reached=_history_target_reached(history_since),
+        checkpoints=_history_checkpoints(history_since),
+        latest_news_id=_db_max_news_id(),
+    )
+    if start_id is None:
+        return
+    _create_task("history_api", start_news_id=start_id, end_time=history_since)
+    logger.info(
+        "robot: ensured history_api task (history_since={} start={})",
+        history_since,
+        start_id,
+    )
 
 
 def _maybe_dispatch_next_history() -> None:
