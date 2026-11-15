@@ -1,329 +1,208 @@
-# FinancialJuice 新闻采集与翻译引擎
+# TechPulse (AI Financial & Tech Intelligence Platform)
 
-从 FinancialJuice 抓取需要登录才能访问的突发金融新闻，支持 **SQLite / PostgreSQL 双存储引擎**，内置**腾讯云 TMT 即时机器翻译服务**，并提供轻量级 Web 监控面板及基于 Watchdog 的高可用自愈守护机制。
+> **企业级科技与突发财经情报全栈系统**：融合 **高可用逆向爬虫**、**多源聚合引擎**、**大模型 (LLM) 智能摘要归纳** 与 **Vue 3 现代化响应式看板** 的端到端开源全栈解决方案。
 
----
-
-## 工作原理
-
-```
-Watchdog (app.robot.watchdog)  ← 守护 Robot，崩溃自动重启
-  └─ Robot (app.robot.robot)
-       ├─ Realtime Browser  — 管理 Chrome，维持登录，拦截 WebSocket 推送，写入数据库
-       ├─ Realtime API      — 定时轮询 Startup API，写 news 表
-       └─ History API       — 按任务翻页抓取历史数据，写 news 表
-
-Translate Service (app.services.translate_api) ← 腾讯云 TMT 即时翻译与独立翻译 HTTP API
-GUI Server (app.gui.server)  ← 可选：Web 面板，内置 Watchdog
-```
-
-| 进程 / 服务 | 模块 | 职责 |
-|---|---|---|
-| **Watchdog** | `app.robot.watchdog` | 守护 Robot：PID 存活检测、崩溃自动重启、每小时自我重启防内存膨胀 |
-| **Robot** | `app.robot.robot` | 主协调器：创建任务、启停子进程、监控崩溃重启；启动时自动运行 Startup 采集并创建历史任务 |
-| **Realtime Browser** | `app.services.realtime_browser` | 独占 Chrome 窗口；登录检测与自动重登；拦截 WebSocket 推送；同时处理 HTTP API 响应 |
-| **Realtime API** | `app.services.realtime_api` | 定时轮询 Startup API，补充 WebSocket 可能遗漏的条目 |
-| **History API** | `app.services.history_api` | 按 `tasks` 表中的任务，通过 `GetPreviousNews` 向前翻页 |
-| **Translate API** | `app.services.translate_api` | 独立 HTTP 服务，调用腾讯云 TMT 批量翻译未翻译新闻，并提供对外 `/translate` 接口 |
-
-### 登录管理（Realtime Browser 内置）
-
-Realtime Browser 持有唯一的 Chrome 窗口，通过以下双重机制检测登出：
-
-- **MutationObserver**（实时）：注入 JS 监听 `#signup` modal 出现，秒级触发
-- **周期检查**（兜底）：每 60 秒扫描一次登出指示器
-
-检测到登出后自动使用硬编码的 FinancialJuice 表单字段 ID 填写凭据并提交。登出/登录事件写入 `login_events` 表。
-
-### 数据采集路径
-
-所有路径最终写入同一张 `news` 表，以 `NewsID` 唯一索引去重（`INSERT OR IGNORE`）。
-
-| 来源 | source_method |
-|---|---|
-| Startup API（HTTP） | `Startup` |
-| GetPreviousNews API（HTTP） | `GetPreviousNews` |
-| 浏览器 WebSocket 推送 | `browser_ws` |
-| 浏览器 HTTP 拦截 | `browser` |
-
-### 历史任务调度
-
-- **长历史任务**：`end_time` 非空，从最新 NewsID 向前翻页至指定时间
-- **缺口填补任务**：`end_news_id` 非空、`end_time` 为空，填补实时与历史之间的 ID 缺口
-- **优先级**：ID 更大的任务优先运行，旧任务暂停为 `pending` 等新任务完成后继续
-
-### 断点恢复
-
-- **任务恢复**：history 任务重启时，优先从 `news` 表查询该 `task_id` 实际存储的最大 `NewsID` 作为起点继续翻页，不重复
-- **崩溃/登出恢复**：`stopped` 状态的历史任务在 Robot 重启时自动重置为 `pending` 并恢复运行
-- **登录恢复**：登出导致暂停的任务在登录恢复后自动重启；若无活跃历史任务则自动创建新任务
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688.svg)](https://fastapi.tiangolo.com/)
+[![Vue 3](https://img.shields.io/badge/Frontend-Vue%203%20%7C%20TypeScript-4FC08D.svg)](https://vuejs.org/)
+[![Playwright](https://img.shields.io/badge/Crawler-Playwright-2EAD33.svg)](https://playwright.dev/)
+[![Database](https://img.shields.io/badge/Storage-PostgreSQL%20%7C%20SQLite-336791.svg)](https://www.postgresql.org/)
+[![LLM Powered](https://img.shields.io/badge/AI-LLM%20Digest%20Engine-FF6F00.svg)]()
 
 ---
 
-## 安装
+## 🌟 系统架构总览
 
-**依赖：** Python 3.11+、Google Chrome
+```mermaid
+graph TD
+    subgraph 采集层 ["📡 动态逆向与数据采集层 (Crawler)"]
+        FJ["FinancialJuice (独家实时财经)"]
+        RSS_CN["国内科技源 (IT之家/36氪/钛媒体/少数派/V2EX等)"]
+        RSS_EN["海外前沿科技 (OpenAI/TechCrunch/The Verge/Ars 等)"]
+        
+        PW["Playwright 驱动 (Cookie保活 / 登录自愈)"]
+        WS_SNIFF["WebSocket 帧实时嗅探拦截"]
+        WATCHDOG["Watchdog 看门狗 (崩溃自愈 / 内存防暴)"]
+        
+        FJ --> PW --> WS_SNIFF
+        PW -. 守护与自愈 .- WATCHDOG
+    end
+
+    subgraph 存储与处理层 ["💾 数据清洗、双引擎存储与翻译"]
+        TMT["腾讯云 TMT API (标题秒级中译 / 熔断轮换)"]
+        PG[("PostgreSQL 核心集群 (psycopg3 / 幂等去重)")]
+        SQLITE[("本地 SQLite (WAL 高速缓存)")]
+        
+        WS_SNIFF --> TMT --> PG
+        RSS_CN --> SQLITE
+        RSS_EN --> SQLITE
+    end
+
+    subgraph 核心服务与AI大模型层 ["🧠 FastAPI 聚合中台 & LLM 智能分析"]
+        APP["FastAPI 异步服务中台"]
+        LLM["LLM 归纳摘要引擎 (DeepSeek / OpenAI 驱动)"]
+        DIGEST["每日科技与财经日报生成器 (Markdown / 热点聚类)"]
+        WS_PUSH["WebSocket 实时广播推流"]
+        
+        PG --> APP
+        SQLITE --> APP
+        APP --> LLM --> DIGEST
+        APP --> WS_PUSH
+    end
+
+    subgraph 展现层 ["💻 Vue 3 现代化看板 (Frontend)"]
+        VUE["Vue 3 + TypeScript + Vite SPA"]
+        TIMELINE["实时快讯时间线 (分秒级流式更新)"]
+        CALENDAR["行业前沿大事件日历"]
+        REPORTS["AI 每日简报阅读看板"]
+        
+        WS_PUSH --> VUE
+        VUE --> TIMELINE
+        VUE --> CALENDAR
+        VUE --> REPORTS
+    end
+```
+
+---
+
+## 📁 模块结构
+
+```text
+.
+├── backend/                   # FastAPI 业务中台与 LLM 智能摘要引擎
+│   ├── app/
+│   │   ├── ingest/            # 多源采集调度器 (RSSHub / HTTP / 代理池适配)
+│   │   ├── summary_service.py # LLM 驱动的每日新闻总结与关键事件提取
+│   │   ├── fj_read.py         # FinancialJuice 高并发只读适配层
+│   │   ├── news_ws.py         # 全双工 WebSocket 实时推送
+│   │   └── main.py            # FastAPI 入口与 SPA 静态托管
+│   ├── data/
+│   │   ├── events_cn.yaml     # 预置科技与大事件日历
+│   │   └── summaries/         # 历史 LLM 生成的每日 Markdown 研报归档
+│   ├── tests/                 # 后端单元测试
+│   └── pyproject.toml
+│
+├── frontend/                  # Vue 3 现代化响应式情报监控看板
+│   ├── src/
+│   │   ├── views/             # 核心视图 (时间线、大事件日历、AI简报、信源管理)
+│   │   ├── composables/       # 组合式 API (WebSocket 断线自动重连)
+│   │   ├── api/               # RESTful 强类型 API Client
+│   │   └── App.vue
+│   ├── package.json
+│   └── vite.config.ts
+│
+├── crawler/                   # Playwright 高可用金融快讯采集节点
+│   ├── app/
+│   │   ├── browser/           # Playwright 无头上下文、Cookie 保活、WS 拦截器
+│   │   ├── robot/             # 采集任务状态机与 Watchdog 看门狗自愈守护
+│   │   ├── services/          # 实时 WebSocket 监听、轮询兜底与历史翻页抓取
+│   │   ├── storage/           # 仓储抽象层 (PostgreSQL / SQLite 双引擎适配)
+│   │   └── gui/               # 极简内置轻量控制台
+│   ├── scripts/               # 数据库一键全量迁移脚本 (SQLite -> PG)
+│   ├── tests/                 # 采集器与断点恢复测试
+│   └── pyproject.toml
+│
+├── deploy/                    # 生产环境运维编排
+│   ├── crawler/               # 采集服务与翻译服务的 Systemd 单元
+│   │   ├── getnews.service
+│   │   └── getnews-translate.service
+│   └── tech-pulse/            # 后台服务的启动/停止脚本与 Systemd 配置
+│       ├── start.sh
+│       └── stop.sh
+│
+├── .gitignore                 # 严苛的数据安全与脱敏规则
+└── README.md                  # 项目总览文档
+```
+
+---
+
+## ⚡ 核心技术特性
+
+### 1. 工业级抗反爬采集与自愈看门狗 (`crawler/`)
+- **Playwright 会话保活**：针对登录鉴权站点，通过注入 `MutationObserver` 实时监听登出弹窗并秒级自动重登；支持 Cookie/StorageState 持久化保存。
+- **WebSocket 逆向嗅探**：通过网络底层监听拦截服务端的实时数据帧，达到比轮询接口快数秒的极致时效性。
+- **Watchdog 双层自愈**：主看门狗实时监测采集协调器 PID，崩溃毫秒级拉起；周期性安全重启防止 Chromium 内存泄露；采集状态机支持精确到 NewsID 的断点续传。
+
+### 2. 双引擎存储与毫秒级机器翻译
+- **双数据库引擎**：支持无依赖本地 **SQLite (WAL 模式)** 与生产级 **PostgreSQL**，利用 `ON CONFLICT (news_id) DO UPDATE` 保证高并发写入时的幂等性与字段增量修补。
+- **腾讯云 TMT 即时翻译**：入库同时触发异步标题中译，内置双密钥自动轮转与配额熔断保护。
+
+### 3. 多源科技新闻聚合与 LLM 智能研报 (`backend/`)
+- **多源智能调度**：串行锁调度管理数十个国内外科技源（IT之家、量子位、钛媒体、Solidot、OpenAI、TechCrunch 等），国内源优先直连，海外源智能调度代理重试。
+- **LLM 自动化日报归纳**：集成大语言模型，自动聚类当日科技重大事件与国际财经异动，自动生成 Markdown 结构化日报（包含一句话速览、核心数据解读、科技突破、舆情热点）。
+
+### 4. 高响应式现代全栈看板 (`frontend/`)
+- **Vue 3 + TypeScript + Vite** 构建，单页应用设计。
+- 支持全双工 **WebSocket 实时推流**，新新闻毫秒级无感滚入时间线；内置大事件日历、信源健康度与 AI 研报直接阅读。
+
+---
+
+## 🚀 快速上手
+
+### 1. 启动采集端 (Crawler)
 
 ```bash
+cd crawler
+python -m venv .venv
+source .venv/bin/activate
 pip install -e .
 python -m playwright install chromium
-```
 
----
-
-## 首次登录
-
-首次运行前，先保存 FinancialJuice 会话 Cookie：
-
-```bash
-python -m app.browser.login
-```
-
-若已配置 `FJ_ACCOUNT` / `FJ_PASSWORD`，自动登录；否则打开浏览器窗口手动登录后按 Enter 保存。会话保存到 `data/storage_state.json`（已加入 `.gitignore`，勿提交）。
-
----
-
-## 启动
-
-**方式 1：Watchdog（推荐生产环境）**
-
-```bash
+# 方式一：生产看门狗无头模式常驻
 python -m app.robot.watchdog
-```
 
-Watchdog 守护 Robot 进程，崩溃自动重启。无需 GUI，占用最小。
-
-**方式 2：GUI Server（开发/监控）**
-
-```bash
+# 方式二：开发或监控模式（内置 Web 状态看板）
 python -m app.gui.server
 ```
 
-打开 `http://127.0.0.1:8000`，包含 Web 面板、资源监控、日志查看，内置 Watchdog 功能。
-
----
-
-## 配置
-
-所有配置通过 `.env` 文件或 `FJ_` 前缀的环境变量读取。
-
-### 认证
-
-| 变量 | 说明 |
-|---|---|
-| `FJ_ACCOUNT` | 登录邮箱（配置后支持自动重登） |
-| `FJ_PASSWORD` | 登录密码 |
-
-### 浏览器
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `FJ_HEADLESS` | `false` | 无头模式 |
-| `FJ_BROWSER_CHANNEL` | `chrome` | `chrome` / `msedge` / `chromium` |
-
-### 浏览器优化
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `FJ_BROWSER_RESTART_HOURS` | `6` | 定时重启浏览器间隔（小时），0 为不重启 |
-| `FJ_BROWSER_MAX_MEMORY_MB` | `200` | 浏览器进程内存超限阈值（MB），0 为不限制 |
-| `FJ_BROWSER_MEMORY_OPTIMIZE` | `false` | 启用 Chrome 内存优化参数（`--memory-pressure-off` 等） |
-
-### 采集间隔
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `FJ_REALTIME_INTERVAL_SECONDS` | `30` | 实时 API 轮询间隔（秒） |
-| `FJ_HISTORY_SYNC_INTERVAL_SECONDS` | `60` | 历史翻页请求间隔（秒） |
-| `FJ_INTERVAL_JITTER_SECONDS` | `10` | 间隔随机抖动范围（秒） |
-| `FJ_COLLECTOR_RETRY_SECONDS` | `10` | 出错后重试等待（秒） |
-| `FJ_LOGIN_CHECK_INTERVAL_SECONDS` | `60` | 登录周期检查间隔（秒） |
-| `FJ_LOGIN_RETRY_ATTEMPTS` | `10` | 登录最大重试次数 |
-| `FJ_LOGIN_RETRY_INTERVAL_SECONDS` | `30` | 登录重试间隔（秒） |
-| `FJ_ROBOT_INTERVAL_SECONDS` | `30` | Robot 主循环检查间隔（秒） |
-
-### Watchdog
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `FJ_WATCHDOG_CHECK_INTERVAL_SECONDS` | `60` | Robot 存活检查间隔（秒） |
-| `FJ_WATCHDOG_RESTART_INTERVAL_SECONDS` | `3600` | Watchdog 自我重启间隔（秒） |
-
-### 功能开关
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `FJ_REALTIME_API_ENABLED` | `true` | 启用实时 API 采集 |
-| `FJ_REALTIME_BROWSER_ENABLED` | `true` | 启用浏览器 WebSocket 采集 |
-
-### 数据库与存储
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `FJ_DATABASE_URL` | `None` | PostgreSQL 连接串（如 `postgresql://user:pass@host:5432/dbname`），配置后优先使用 PostgreSQL |
-| `FJ_DATABASE_PATH` | `data/news.db` | SQLite 数据库路径（未配置 `FJ_DATABASE_URL` 时使用） |
-| `FJ_STORAGE_STATE_PATH` | `data/storage_state.json` | 浏览器 Cookie 文件路径 |
-
-### 翻译服务（腾讯云 TMT）
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `FJ_TMT_SECRET_ID` | `None` | 腾讯云 API SecretId |
-| `FJ_TMT_SECRET_KEY` | `None` | 腾讯云 API SecretKey |
-| `FJ_TMT_SECRET_ID_2` | `None` | 腾讯云 API 备用 SecretId（额度耗尽自动切换） |
-| `FJ_TMT_SECRET_KEY_2` | `None` | 腾讯云 API 备用 SecretKey |
-| `FJ_TMT_REGION` | `ap-guangzhou` | 腾讯云 TMT 服务地域 |
-| `FJ_TMT_API_HOST` | `0.0.0.0` | 翻译 HTTP API 绑定地址 |
-| `FJ_TMT_API_PORT` | `8765` | 翻译 HTTP API 服务端口 |
-
-### GUI 与路径
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `FJ_GUI_HOST` | `127.0.0.1` | GUI 绑定地址（`0.0.0.0` 对外暴露） |
-| `FJ_GUI_PORT` | `8000` | GUI 端口 |
-
----
-
-## 数据库与双引擎支持
-
-系统支持 **SQLite** 与 **PostgreSQL** 双引擎切换：
-- **未配置 `FJ_DATABASE_URL`** 时，默认使用 `data/news.db`（SQLite，WAL 模式，`PRAGMA synchronous=NORMAL`）。
-- **配置了 `FJ_DATABASE_URL`** 时，自动连接 PostgreSQL，利用 `ON CONFLICT (news_id) DO UPDATE` 实现高并发下的幂等去重与分类更新。
-
-所有时间字段均为 CST（UTC+8）ISO 8601 字符串。
-
-### SQLite 迁移至 PostgreSQL
-
-项目附带迁移脚本，可一键将已有 SQLite 数据库中的新闻、任务进度全量同步至 PostgreSQL：
+### 2. 启动中台与 AI 后端 (Backend)
 
 ```bash
-python scripts/migrate_sqlite_to_pg.py
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+
+# 启动 FastAPI 聚合服务
+uvicorn app.main:app --host 0.0.0.0 --port 8088 --reload
 ```
 
-### 表结构
+### 3. 启动前端监控看板 (Frontend)
 
-| 表名 | 用途 |
-|---|---|
-| `news` | 所有采集的新闻，`NewsID` 唯一索引（包含英文原标题与中译标题） |
-| `tasks` | 子服务任务状态与进度 |
-| `login_events` | 登出检测与登录结果记录 |
-| `task_logs` | Watchdog / Robot / Realtime Browser 运行日志 |
-| `gui_settings` | GUI 配置键值存储 |
-
-### `news` 主要字段
-
-| 字段 | 说明 |
-|---|---|
-| `NewsID` | FinancialJuice 原始 ID（唯一索引） |
-| `Title` / `Description` | 英文标题 / 正文 |
-| `Title_Zh` | 中文翻译标题（由 TMT 翻译服务填充） |
-| `DatePublished` | 发布时间（来自 API，美东时间） |
-| `FCName` | 来源名称 |
-| `Level` | 分类标签 |
-| `EURL` | 外部链接 |
-| `source_method` | 采集方式（`Startup` / `GetPreviousNews` / `browser` / `browser_ws`） |
-| `task_id` | 关联的采集任务 ID（0 表示无对应独立任务） |
-| `fetched_at` / `created_at` | 抓取时间 / 入库时间（CST） |
-
-### `login_events` 字段
-
-| 字段 | 说明 |
-|---|---|
-| `event` | `logged_out` / `login_ok` / `login_failed` |
-| `detail` | 附加信息（触发原因、重试次数、错误信息） |
-| `created_at` | 事件时间（CST） |
-
-### `gui_settings` 说明
-
-| key | 说明 |
-|---|---|
-| `history_since` | 历史同步截止时间，Robot 读取后创建 `history_api` 任务 |
-| `login_status` | Realtime Browser 写入（`ok` / `checking` / `failed`） |
-| `robot_pid` | Robot 进程 PID，Watchdog 用于存活检测 |
+```bash
+cd frontend
+npm install
+npm run dev
+# 浏览器访问 http://localhost:5173
+```
 
 ---
 
-## 生产部署（Systemd）
+## 🛠️ 生产环境部署
 
-项目提供了生产环境守护进程模板（位于 `deploy/`）：
+在 Linux 服务器中，推荐使用 `deploy/` 下的 Systemd 单元常驻运行：
 
-1. **新闻采集与 Web 面板服务** (`deploy/getnews.service`)：
-   通过 `xvfb-run` 虚拟显示屏常驻运行，支持开机自启、故障自动重启与看门狗。
-   ```bash
-   sudo cp deploy/getnews.service /etc/systemd/system/
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now getnews
-   ```
+```bash
+# 1. 部署采集守护服务 (使用虚拟显示屏 xvfb-run 无头运行)
+sudo cp deploy/crawler/*.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now getnews
+sudo systemctl enable --now getnews-translate
 
-2. **即时翻译服务** (`deploy/getnews-translate.service`)：
-   独立常驻运行腾讯云 TMT 批量翻译 API 服务。
-   ```bash
-   sudo cp deploy/getnews-translate.service /etc/systemd/system/
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now getnews-translate
-   ```
+# 2. 启动 TechPulse 后台服务
+cd deploy/tech-pulse
+./start.sh
+```
 
 ---
 
-## API 接口
+## 🔒 安全与隐私声明
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/api/stats` | 新闻总量、今日数量、本次实时采集数量、分类与来源分布 |
-| GET | `/api/news` | 分页查询，支持 `q`（关键词）、`category`、`limit`、`offset` |
-| GET | `/api/news/:id` | 单条新闻完整字段 |
-| GET | `/api/tasks` | 所有任务当前状态与进度 |
-| GET | `/api/history-tasks` | 最近 20 条历史任务 |
-| GET | `/api/history-config` | 读取历史同步截止时间 |
-| POST | `/api/history-config` | 保存历史同步截止时间（`{"since": "2026-01-01T00:00"}`） |
-| GET | `/api/login-events` | 最近 10 条登录事件 |
-| GET | `/api/memory` | 各进程 CPU 与内存占用 |
-| GET | `/api/logs/stream` | 实时日志 SSE 流 |
-| POST | `:8765/translate` | （翻译独立服务）批量翻译英文文本为中文 |
+- 敏感凭据（如 `.env`、API 密钥、数据库连接串、本地 Cookie 凭据）严格受到根目录 `.gitignore` 保护，切勿提交至公网仓库。
+- 生产部署请务必修改 `backend/data/access.env` 中的 `TECHPULSE_ACCESS_KEY` 以启用访问鉴权。
 
 ---
 
-## 项目结构
+## 📄 开源许可证
 
-```
-app/
-  browser/
-    context.py            BrowserContext 辅助（启动参数、图片屏蔽）
-    login.py              登录凭据管理与自动重登
-    session.py            storage_state 文件读写
-    network_sniffer.py    从实时流量捕获 API URL
-  collectors/
-    startup_api_client.py urllib 直接调用 API + URL 自动发现
-    startup_collector.py  单次 Startup 请求，写入 news 表
-  gui/
-    server.py             HTTP 服务器 + TaskManager（管理 Robot 子进程，内置 Watchdog）
-    static/               index.html, app.js, app.css
-  parsers/
-    financialjuice.py     Startup/GetPreviousNews JSON → NewsItem
-  robot/
-    robot.py              主协调器：任务创建、子进程管理、断点恢复
-    watchdog.py           进程守护：存活检测、崩溃重启、自我重启
-  services/
-    realtime_browser.py   独占 Chrome；登录管理；WebSocket 推送采集
-    realtime_api.py       定时轮询 Startup API
-    history_api.py        GetPreviousNews 翻页历史采集
-    translate_tmt.py      腾讯云 TMT 机器翻译封装与配额熔断
-    translate_api.py      独立翻译 HTTP 服务
-  storage/
-    database.py           Schema、init_db、PostgreSQL/SQLite 兼容连接与迁移适配
-    repository.py         NewsRepository（insert_many 等，支持双引擎）
-    task_repository.py    TaskRepository（create、update、get_active 等）
-    task_log.py           写入 task_logs 表
-    task_status.py        cst_now、utc_now 时间辅助
-  config.py               pydantic-settings（FJ_* 环境变量）
-  models.py               NewsItem 数据类
-deploy/                   Systemd 服务单元文件模板
-scripts/
-  migrate_sqlite_to_pg.py SQLite 至 PostgreSQL 迁移脚本
-tests/                    自动化测试套件 (pytest)
-data/                     运行时数据（已加入 .gitignore，勿提交）
-  news.db
-  storage_state.json
-  logs/
-```
+本项目采用 [MIT License](LICENSE) 授权许可。

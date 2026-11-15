@@ -1,33 +1,55 @@
-# Local environment
-.env*
+# Python & Virtual Environments
 .venv/
-*.bak*
-
-# Python cache
+*/.venv/
 __pycache__/
+*/__pycache__/
+*/*/__pycache__/
 *.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+*/.pytest_cache/
+.ruff_cache/
+*/.ruff_cache/
+.python-version
 
-# Runtime data
-data/*
-!data/.gitkeep
+# Node & Frontend
+node_modules/
+*/node_modules/
+dist/
+*/dist/
+.vite/
+
+# Environment Variables & Secrets (Strictly Excluded)
+.env*
+*.env*
+*.key
+*.pem
+
+# Runtime Databases, Logs & Backups
 *.db
+*.db-journal
 *.sqlite
 *.sqlite3
-*.db-journal
 *.sqlite-journal
-
-# Logs
+*.pid
 *.log
-data/logs/
+logs/
+*/logs/
+*.bak*
 
-# Browser/session state
-data/browser_profile/
-data/storage_state.json
-data/startup_api_url.txt
+# Crawler Runtime Cache
+crawler/data/*
+!crawler/data/.gitkeep
 
-# Build artifacts
-*.egg-info/
+# Backend Runtime Cache
+backend/data/*.db*
+backend/data/*.log*
+backend/data/*.pid*
+backend/data/access.env
 
-# OS and IDE local files
+# OS & IDE
 .DS_Store
 .idea/
+.vscode/
+*.swp

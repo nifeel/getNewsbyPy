@@ -1,0 +1,102 @@
+# 国内科技大事件种子。日期以官网为准；未官宣的只填预计窗口。
+events:
+  - id: waic-2026
+    title: 世界人工智能大会 WAIC 2026
+    start_date: "2026-07-17"
+    end_date: "2026-07-20"
+    location: 上海
+    url: https://www.worldaic.com.cn/
+    status: confirmed
+    category: conference
+
+  - id: qcon-beijing-2026
+    title: QCon 全球软件开发大会·北京 2026
+    start_date: "2026-04-16"
+    end_date: "2026-04-18"
+    location: 北京
+    url: https://qcon.infoq.cn/
+    status: confirmed
+    category: conference
+
+  - id: huawei-connect-2026
+    title: 华为全联接大会 Huawei Connect 2026
+    start_date: "2026-09-01"
+    end_date: "2026-09-03"
+    location: 上海
+    url: https://www.huawei.com/cn/events/huaweiconnect
+    status: estimated
+    category: conference
+    note: 往年多在 9 月，精确日期以官网为准
+
+  - id: wuzhen-wic-2026
+    title: 世界互联网大会·乌镇峰会 2026
+    start_date: "2026-11-01"
+    end_date: "2026-11-03"
+    location: 浙江乌镇
+    url: https://www.wicinternet.org/
+    status: estimated
+    category: conference
+    note: 往年多在 11 月，精确日期以官网为准
+
+  - id: zgc-forum-2026
+    title: 中关村论坛 2026
+    start_date: "2026-04-25"
+    end_date: "2026-04-29"
+    location: 北京
+    url: https://www.zhongguancunforum.com/
+    status: estimated
+    category: conference
+
+  - id: bigdata-expo-2026
+    title: 中国国际大数据产业博览会 2026
+    start_date: "2026-05-20"
+    end_date: "2026-05-23"
+    location: 贵阳
+    url: https://www.bigdata-expo.cn/
+    status: estimated
+    category: conference
+
+  - id: qcon-shanghai-2026
+    title: QCon 全球软件开发大会·上海 2026
+    start_date: "2026-10-20"
+    end_date: "2026-10-22"
+    location: 上海
+    url: https://qcon.infoq.cn/
+    status: estimated
+    category: conference
+
+  - id: archsummit-2026
+    title: ArchSummit 全球架构师峰会 2026
+    start_date: "2026-12-04"
+    end_date: "2026-12-05"
+    location: 北京
+    url: https://archsummit.infoq.cn/
+    status: estimated
+    category: conference
+
+  - id: coscon-2026
+    title: 中国开源年会 COSCon 2026
+    start_date: "2026-10-24"
+    end_date: "2026-10-25"
+    location: 待定
+    url: https://kaiyuanshe.cn/
+    status: estimated
+    category: conference
+
+  - id: pycon-china-2026
+    title: PyCon China 2026
+    start_date: "2026-09-20"
+    end_date: "2026-09-21"
+    location: 待定
+    url: https://cn.pycon.org/
+    status: estimated
+    category: conference
+
+  - id: kubecon-china-2026
+    title: KubeCon + CloudNativeCon China 2026
+    start_date: "2026-06-10"
+    end_date: "2026-06-11"
+    location: 待定
+    url: https://events.linuxfoundation.org/
+    status: estimated
+    category: conference

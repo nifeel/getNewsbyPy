@@ -1,0 +1,275 @@
+# region: cn 直连；intl 只走本机代理
+sources:
+  - id: 36kr
+    name: 36氪
+    region: cn
+    kind: news
+    access: direct
+    enabled: false
+    url: https://36kr.com/feed
+    poll_interval_minutes: 10
+    lang: zh
+    note: 被火山引擎 WAF 拦截，暂无免盾公开 RSS
+
+  - id: 36kr-flash
+    name: 36氪快讯
+    region: cn
+    kind: news
+    access: direct
+    enabled: false
+    url: https://36kr.com/feed-newsflash
+    poll_interval_minutes: 10
+    lang: zh
+    note: 被火山引擎 WAF 拦截，暂无免盾公开 RSS
+
+  - id: jiqizhixin
+    name: 机器之心
+    region: cn
+    kind: news
+    access: direct
+    enabled: false
+    url: https://www.jiqizhixin.com/rss
+    poll_interval_minutes: 10
+    lang: zh
+    note: 官方已下线公开 RSS，重定向至商业数据服务
+
+  - id: ithome
+    name: IT之家
+    region: cn
+    kind: news
+    access: direct
+    enabled: true
+    url: https://www.ithome.com/rss/
+    poll_interval_minutes: 15
+    lang: zh
+
+  - id: qbitai
+    name: 量子位
+    region: cn
+    kind: news
+    access: direct
+    enabled: true
+    url: https://www.qbitai.com/feed
+    poll_interval_minutes: 10
+    lang: zh
+
+  - id: ifanr
+    name: 爱范儿
+    region: cn
+    kind: news
+    access: direct
+    enabled: true
+    url: https://www.ifanr.com/feed
+    poll_interval_minutes: 15
+    lang: zh
+
+  - id: tmtpost
+    name: 钛媒体
+    region: cn
+    kind: news
+    access: direct
+    enabled: true
+    url: https://www.tmtpost.com/feed
+    poll_interval_minutes: 15
+    lang: zh
+
+  - id: infoq-cn
+    name: InfoQ 中文
+    region: cn
+    kind: news
+    access: direct
+    enabled: true
+    url: https://www.infoq.cn/feed
+    poll_interval_minutes: 15
+    lang: zh
+
+  - id: solidot
+    name: Solidot
+    region: cn
+    kind: news
+    access: direct
+    enabled: true
+    url: https://www.solidot.org/index.rss
+    poll_interval_minutes: 10
+    lang: zh
+
+  - id: sspai
+    name: 少数派
+    region: cn
+    kind: news
+    access: direct
+    enabled: true
+    url: https://sspai.com/feed
+    poll_interval_minutes: 20
+    lang: zh
+
+  - id: v2ex-tech
+    name: V2EX 技术
+    region: cn
+    kind: news
+    access: direct
+    enabled: true
+    url: https://www.v2ex.com/feed/tab/tech.xml
+    poll_interval_minutes: 15
+    lang: zh
+    note: 直连超时会走本机代理重试
+
+  - id: juejin-ai
+    name: 掘金 AI
+    region: cn
+    kind: news
+    access: rsshub
+    enabled: false
+    url: /juejin/category/ai
+    poll_interval_minutes: 30
+    lang: zh
+    note: 需要本地 RSSHub，默认关闭
+
+  - id: weixin-jiqizhixin
+    name: 机器之心公众号
+    region: cn
+    kind: news
+    access: rsshub
+    enabled: false
+    url: /weixin/mp/机器之心
+    poll_interval_minutes: 30
+    lang: zh
+    note: 需要本地 RSSHub，默认关闭
+
+  # ---- 国外源：只经本机代理，禁止直连 ----
+  - id: techcrunch
+    name: TechCrunch
+    region: intl
+    kind: news
+    access: proxy
+    enabled: true
+    url: https://techcrunch.com/feed/
+    poll_interval_minutes: 15
+    lang: en
+
+  - id: ars-technica
+    name: Ars Technica
+    region: intl
+    kind: news
+    access: proxy
+    enabled: true
+    url: https://feeds.arstechnica.com/arstechnica/index
+    poll_interval_minutes: 15
+    lang: en
+
+  - id: the-verge
+    name: The Verge
+    region: intl
+    kind: news
+    access: proxy
+    enabled: true
+    url: https://www.theverge.com/rss/index.xml
+    poll_interval_minutes: 15
+    lang: en
+
+  - id: openai-news
+    name: OpenAI News
+    region: intl
+    kind: news
+    access: proxy
+    enabled: true
+    url: https://openai.com/news/rss.xml
+    poll_interval_minutes: 20
+    lang: en
+
+  - id: nvidia-news
+    name: NVIDIA News
+    region: intl
+    kind: news
+    access: proxy
+    enabled: true
+    url: https://nvidianews.nvidia.com/rss.xml
+    poll_interval_minutes: 30
+    lang: en
+
+  - id: apple-newsroom
+    name: Apple Newsroom
+    region: intl
+    kind: news
+    access: proxy
+    enabled: true
+    url: https://www.apple.com/newsroom/rss-feed.rss
+    poll_interval_minutes: 30
+    lang: en
+
+  - id: hacker-news
+    name: Hacker News
+    region: intl
+    kind: news
+    access: proxy
+    enabled: true
+    url: https://hnrss.org/frontpage
+    poll_interval_minutes: 10
+    lang: en
+
+  - id: techconf-directory
+    name: TechConf.Directory
+    region: intl
+    kind: event
+    access: proxy
+    enabled: true
+    url: https://techconf.directory/api/conferences.json
+    poll_interval_minutes: 1440
+    lang: en
+
+  # 内网 FinancialJuice：只读 SELECT news 契约列，不写回
+  - id: financialjuice
+    name: FinancialJuice
+    region: intl
+    kind: news
+    access: fj_readonly
+    enabled: true
+    url: fj://news
+    poll_interval_minutes: 5
+    lang: zh
+    note: 时间线直读内网库，不写入本地 articles
+
+  - id: forex-factory-calendar
+    name: 财经日历
+    region: intl
+    kind: calendar
+    access: proxy
+    enabled: true
+    url: https://nfs.faireconomy.media/ff_calendar_thisweek.json
+    poll_interval_minutes: 60
+    lang: en
+    note: 采集写入本地 events，大事件与简报读库
+
+  - id: weibo-hot
+    name: 微博热搜
+    region: cn
+    kind: hotspot
+    access: direct
+    enabled: true
+    url: https://weibo.com/ajax/side/hotSearch
+    poll_interval_minutes: 20
+    lang: zh
+    note: 采集写入本地 hot_items，简报读最近一批
+
+  # 榜单写入独立 PostgreSQL 库的 chart_items，同一业务日重复采集覆盖当天快照
+  - id: github-trending
+    name: GitHub 热榜
+    region: intl
+    kind: chart
+    access: proxy
+    enabled: true
+    url: https://github.com/trending?since=daily
+    poll_interval_minutes: 180
+    lang: en
+    note: 每日热榜页面解析，经本机代理
+
+  - id: appstore-top
+    name: App Store 热门榜
+    region: intl
+    kind: chart
+    access: direct
+    enabled: true
+    url: https://itunes.apple.com/{region}/rss/{chart}/limit=50/json
+    poll_interval_minutes: 180
+    lang: en
+    note: 美英德法中日韩台港 × 免费/付费/畅销，各前 50
