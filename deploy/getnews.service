@@ -1,0 +1,19 @@
+[Unit]
+Description=FinancialJuice news collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nifeel
+Group=nifeel
+WorkingDirectory=/home/nifeel/getNewsbyPy
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x720x16 -nolisten tcp" /home/nifeel/getNewsbyPy/.venv/bin/python -m app.gui.server
+Restart=on-failure
+RestartSec=10
+KillMode=control-group
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,6 @@
-# FinancialJuice 新闻采集器
+# FinancialJuice 新闻采集与翻译引擎
 
-从 FinancialJuice 抓取需要登录才能访问的新闻，存储到本地 SQLite 数据库，并提供 Web 界面用于浏览新闻、监控任务。
+从 FinancialJuice 抓取需要登录才能访问的突发金融新闻，支持 **SQLite / PostgreSQL 双存储引擎**，内置**腾讯云 TMT 即时机器翻译服务**，并提供轻量级 Web 监控面板及基于 Watchdog 的高可用自愈守护机制。
 
 ---
 
@@ -9,20 +9,22 @@
 ```
 Watchdog (app.robot.watchdog)  ← 守护 Robot，崩溃自动重启
   └─ Robot (app.robot.robot)
-       ├─ Realtime Browser  — 管理 Chrome，维持登录，拦截 WebSocket 推送，写 news 表
+       ├─ Realtime Browser  — 管理 Chrome，维持登录，拦截 WebSocket 推送，写入数据库
        ├─ Realtime API      — 定时轮询 Startup API，写 news 表
        └─ History API       — 按任务翻页抓取历史数据，写 news 表
 
+Translate Service (app.services.translate_api) ← 腾讯云 TMT 即时翻译与独立翻译 HTTP API
 GUI Server (app.gui.server)  ← 可选：Web 面板，内置 Watchdog
 ```
 
-| 进程 | 模块 | 职责 |
+| 进程 / 服务 | 模块 | 职责 |
 |---|---|---|
 | **Watchdog** | `app.robot.watchdog` | 守护 Robot：PID 存活检测、崩溃自动重启、每小时自我重启防内存膨胀 |
 | **Robot** | `app.robot.robot` | 主协调器：创建任务、启停子进程、监控崩溃重启；启动时自动运行 Startup 采集并创建历史任务 |
 | **Realtime Browser** | `app.services.realtime_browser` | 独占 Chrome 窗口；登录检测与自动重登；拦截 WebSocket 推送；同时处理 HTTP API 响应 |
 | **Realtime API** | `app.services.realtime_api` | 定时轮询 Startup API，补充 WebSocket 可能遗漏的条目 |
 | **History API** | `app.services.history_api` | 按 `tasks` 表中的任务，通过 `GetPreviousNews` 向前翻页 |
+| **Translate API** | `app.services.translate_api` | 独立 HTTP 服务，调用腾讯云 TMT 批量翻译未翻译新闻，并提供对外 `/translate` 接口 |
 
 ### 登录管理（Realtime Browser 内置）
 
@@ -154,28 +156,56 @@ python -m app.gui.server
 | `FJ_REALTIME_API_ENABLED` | `true` | 启用实时 API 采集 |
 | `FJ_REALTIME_BROWSER_ENABLED` | `true` | 启用浏览器 WebSocket 采集 |
 
+### 数据库与存储
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `FJ_DATABASE_URL` | `None` | PostgreSQL 连接串（如 `postgresql://user:pass@host:5432/dbname`），配置后优先使用 PostgreSQL |
+| `FJ_DATABASE_PATH` | `data/news.db` | SQLite 数据库路径（未配置 `FJ_DATABASE_URL` 时使用） |
+| `FJ_STORAGE_STATE_PATH` | `data/storage_state.json` | 浏览器 Cookie 文件路径 |
+
+### 翻译服务（腾讯云 TMT）
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `FJ_TMT_SECRET_ID` | `None` | 腾讯云 API SecretId |
+| `FJ_TMT_SECRET_KEY` | `None` | 腾讯云 API SecretKey |
+| `FJ_TMT_SECRET_ID_2` | `None` | 腾讯云 API 备用 SecretId（额度耗尽自动切换） |
+| `FJ_TMT_SECRET_KEY_2` | `None` | 腾讯云 API 备用 SecretKey |
+| `FJ_TMT_REGION` | `ap-guangzhou` | 腾讯云 TMT 服务地域 |
+| `FJ_TMT_API_HOST` | `0.0.0.0` | 翻译 HTTP API 绑定地址 |
+| `FJ_TMT_API_PORT` | `8765` | 翻译 HTTP API 服务端口 |
+
 ### GUI 与路径
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `FJ_GUI_HOST` | `127.0.0.1` | GUI 绑定地址（`0.0.0.0` 对外暴露） |
 | `FJ_GUI_PORT` | `8000` | GUI 端口 |
-| `FJ_DATABASE_PATH` | `data/news.db` | SQLite 数据库路径 |
-| `FJ_STORAGE_STATE_PATH` | `data/storage_state.json` | 浏览器 Cookie 文件路径 |
 
 ---
 
-## 数据库
+## 数据库与双引擎支持
 
-`data/news.db`（SQLite，WAL 模式，`PRAGMA synchronous=NORMAL`）
+系统支持 **SQLite** 与 **PostgreSQL** 双引擎切换：
+- **未配置 `FJ_DATABASE_URL`** 时，默认使用 `data/news.db`（SQLite，WAL 模式，`PRAGMA synchronous=NORMAL`）。
+- **配置了 `FJ_DATABASE_URL`** 时，自动连接 PostgreSQL，利用 `ON CONFLICT (news_id) DO UPDATE` 实现高并发下的幂等去重与分类更新。
 
-所有时间字段均为 CST（UTC+8）ISO 8601 字符串，无时区后缀。
+所有时间字段均为 CST（UTC+8）ISO 8601 字符串。
+
+### SQLite 迁移至 PostgreSQL
+
+项目附带迁移脚本，可一键将已有 SQLite 数据库中的新闻、任务进度全量同步至 PostgreSQL：
+
+```bash
+python scripts/migrate_sqlite_to_pg.py
+```
 
 ### 表结构
 
 | 表名 | 用途 |
 |---|---|
-| `news` | 所有采集的新闻，`NewsID` 唯一索引 |
+| `news` | 所有采集的新闻，`NewsID` 唯一索引（包含英文原标题与中译标题） |
 | `tasks` | 子服务任务状态与进度 |
 | `login_events` | 登出检测与登录结果记录 |
 | `task_logs` | Watchdog / Robot / Realtime Browser 运行日志 |
@@ -186,7 +216,8 @@ python -m app.gui.server
 | 字段 | 说明 |
 |---|---|
 | `NewsID` | FinancialJuice 原始 ID（唯一索引） |
-| `Title` / `Description` | 标题 / 正文 |
+| `Title` / `Description` | 英文标题 / 正文 |
+| `Title_Zh` | 中文翻译标题（由 TMT 翻译服务填充） |
 | `DatePublished` | 发布时间（来自 API，美东时间） |
 | `FCName` | 来源名称 |
 | `Level` | 分类标签 |
@@ -213,6 +244,28 @@ python -m app.gui.server
 
 ---
 
+## 生产部署（Systemd）
+
+项目提供了生产环境守护进程模板（位于 `deploy/`）：
+
+1. **新闻采集与 Web 面板服务** (`deploy/getnews.service`)：
+   通过 `xvfb-run` 虚拟显示屏常驻运行，支持开机自启、故障自动重启与看门狗。
+   ```bash
+   sudo cp deploy/getnews.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now getnews
+   ```
+
+2. **即时翻译服务** (`deploy/getnews-translate.service`)：
+   独立常驻运行腾讯云 TMT 批量翻译 API 服务。
+   ```bash
+   sudo cp deploy/getnews-translate.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now getnews-translate
+   ```
+
+---
+
 ## API 接口
 
 | 方法 | 路径 | 说明 |
@@ -227,6 +280,7 @@ python -m app.gui.server
 | GET | `/api/login-events` | 最近 10 条登录事件 |
 | GET | `/api/memory` | 各进程 CPU 与内存占用 |
 | GET | `/api/logs/stream` | 实时日志 SSE 流 |
+| POST | `:8765/translate` | （翻译独立服务）批量翻译英文文本为中文 |
 
 ---
 
@@ -254,16 +308,21 @@ app/
     realtime_browser.py   独占 Chrome；登录管理；WebSocket 推送采集
     realtime_api.py       定时轮询 Startup API
     history_api.py        GetPreviousNews 翻页历史采集
+    translate_tmt.py      腾讯云 TMT 机器翻译封装与配额熔断
+    translate_api.py      独立翻译 HTTP 服务
   storage/
-    database.py           Schema、init_db、WAL 配置
-    repository.py         NewsRepository（insert_many 等）
+    database.py           Schema、init_db、PostgreSQL/SQLite 兼容连接与迁移适配
+    repository.py         NewsRepository（insert_many 等，支持双引擎）
     task_repository.py    TaskRepository（create、update、get_active 等）
     task_log.py           写入 task_logs 表
     task_status.py        cst_now、utc_now 时间辅助
   config.py               pydantic-settings（FJ_* 环境变量）
   models.py               NewsItem 数据类
-
-data/                     运行时数据（已加入 .gitignore）
+deploy/                   Systemd 服务单元文件模板
+scripts/
+  migrate_sqlite_to_pg.py SQLite 至 PostgreSQL 迁移脚本
+tests/                    自动化测试套件 (pytest)
+data/                     运行时数据（已加入 .gitignore，勿提交）
   news.db
   storage_state.json
   logs/

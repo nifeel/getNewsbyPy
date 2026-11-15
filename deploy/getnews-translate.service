@@ -1,0 +1,17 @@
+[Unit]
+Description=FinancialJuice title translation (Tencent TMT)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nifeel
+Group=nifeel
+WorkingDirectory=/home/nifeel/getNewsbyPy
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/nifeel/getNewsbyPy/.venv/bin/python -m app.services.translate_api
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
